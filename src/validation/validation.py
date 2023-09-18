@@ -60,7 +60,11 @@ class StagingInfo:
     name: str = "stg"
     app_name = "Packit-as-a-Service-stg"
     pr_comment = "/packit-stg build"
-    opened_pr_trigger__packit_yaml_fix = YamlFix("---", '---\npackit_instances: ["stg"]', "Build using Packit-stg")
+    opened_pr_trigger__packit_yaml_fix = YamlFix(
+        "---",
+        '---\npackit_instances: ["stg"]',
+        "Build using Packit-stg",
+    )
     copr_user = "packit-stg"
     push_trigger_tests_prefix = "Basic test case (stg) - push trigger"
     github_bot_name = "packit-as-a-service-stg[bot]"
@@ -112,7 +116,9 @@ class Testcase:
         self.run_checks()
         if self.failure_msg:
             message = f"{self.pr.title} ({self.pr.url}) failed: {self.failure_msg}"
-            sentry_sdk.capture_message(message) if getenv("SENTRY_SECRET") else logging.warning(message)
+            sentry_sdk.capture_message(message) if getenv("SENTRY_SECRET") else logging.warning(
+                message,
+            )
 
         if self.trigger == Trigger.pr_opened:
             self.pr.close()
@@ -123,7 +129,10 @@ class Testcase:
         Trigger the build (by commenting/pushing to the PR/opening a new PR).
         :return:
         """
-        logging.info(f"Triggering a build for {self.pr if self.pr else 'new PR'}")
+        logging.info(
+            "Triggering a build for %s",
+            self.pr if self.pr else "new PR",
+        )
         if self.trigger == Trigger.comment:
             self.pr.comment(self.deployment.pr_comment)
         elif self.trigger == Trigger.push:
@@ -137,7 +146,9 @@ class Testcase:
         :return:
         """
         branch = self.pr.source_branch
-        commit_msg = f"Commit build trigger ({datetime.now(tz=datetime.timezone.utc).strftime('%d/%m/%y')})"
+        commit_msg = (
+            f"Commit build trigger ({datetime.now(tz=datetime.timezone.utc).strftime('%d/%m/%y')})"
+        )
         self.head_commit = self.create_empty_commit(branch, commit_msg)
 
     def create_pr(self):
@@ -198,17 +209,25 @@ class Testcase:
                 return
             status_names = [self.get_status_name(status) for status in self.get_statuses()]
 
-        logging.info(f"Watching pending statuses for commit {self.head_commit}")
+        logging.info(
+            "Watching pending statuses for commit %s",
+            self.head_commit,
+        )
         while True:
             if datetime.now(tz=datetime.timezone.utc) > watch_end:
                 self.failure_msg += failure_message
                 return
 
-            new_statuses = [status for status in self.get_statuses() if self.get_status_name(status) in status_names]
+            new_statuses = [
+                status
+                for status in self.get_statuses()
+                if self.get_status_name(status) in status_names
+            ]
 
             for status in new_statuses:
-                # check run / status can be in a short period time changed from queued (Task was accepted)
-                # to in_progress, so check only that it doesn't have completed status
+                # check run / status can be in a short period time changed from queued
+                # (Task was accepted) to in_progress, so check only that it doesn't
+                # have completed status
                 if not self.is_status_completed(status):
                     return
 
@@ -221,7 +240,9 @@ class Testcase:
         """
         if self.pr:
             try:
-                old_build_len = len(copr.build_proxy.get_list(self.deployment.copr_user, self.copr_project_name))
+                old_build_len = len(
+                    copr.build_proxy.get_list(self.deployment.copr_user, self.copr_project_name),
+                )
             except Exception:
                 old_build_len = 0
 
@@ -237,14 +258,21 @@ class Testcase:
 
         self.check_pending_check_runs()
 
-        logging.info(f"Watching whether a build has been submitted for {self.pr} in {self.copr_project_name}")
+        logging.info(
+            "Watching whether a build has been submitted for %s in %s",
+            self.pr,
+            self.copr_project_name,
+        )
         while True:
             if datetime.now(tz=datetime.timezone.utc) > watch_end:
                 self.failure_msg += "The build was not submitted in Copr in time 15 minutes.\n"
                 return None
 
             try:
-                new_builds = copr.build_proxy.get_list(self.deployment.copr_user, self.copr_project_name)
+                new_builds = copr.build_proxy.get_list(
+                    self.deployment.copr_user,
+                    self.copr_project_name,
+                )
             except Exception:
                 # project does not exist yet
                 logging.info("Copr project doesn't exist yet")
@@ -257,9 +285,13 @@ class Testcase:
             new_comments = new_comments[: (len(new_comments) - old_comment_len)]
 
             if len(new_comments) > 1:
-                comment = [comment.body for comment in new_comments if comment.author == self.account_name]
+                comment = [
+                    comment.body for comment in new_comments if comment.author == self.account_name
+                ]
                 if len(comment) > 0:
-                    self.failure_msg += f"New github comment from p-s while submitting Copr build: {comment[0]}\n"
+                    self.failure_msg += (
+                        f"New github comment from p-s while submitting Copr build: {comment[0]}\n"
+                    )
 
             time.sleep(30)
 
@@ -271,7 +303,7 @@ class Testcase:
         """
         watch_end = datetime.now(tz=datetime.timezone.utc) + timedelta(seconds=60 * 15)
         state_reported = ""
-        logging.info(f"Watching Copr build {build_id}")
+        logging.info("Watching Copr build %s", build_id)
 
         while True:
             if datetime.now(tz=datetime.timezone.utc) > watch_end:
@@ -293,7 +325,9 @@ class Testcase:
                 "waiting",
             ]:
                 if state_reported != "succeeded":
-                    self.failure_msg += f"The build in Copr was not successful. Copr state: {state_reported}.\n"
+                    self.failure_msg += (
+                        f"The build in Copr was not successful. Copr state: {state_reported}.\n"
+                    )
                 return
 
             time.sleep(30)
@@ -307,10 +341,14 @@ class Testcase:
 
         if failure:
             packit_comments = [
-                comment for comment in self.pr.get_comments(reverse=True) if comment.author == self.account_name
+                comment
+                for comment in self.pr.get_comments(reverse=True)
+                if comment.author == self.account_name
             ]
             if not packit_comments:
-                self.failure_msg += "No comment from p-s about unsuccessful last copr build found.\n"
+                self.failure_msg += (
+                    "No comment from p-s about unsuccessful last copr build found.\n"
+                )
 
     def fix_packit_yaml(self, branch: str):
         """
@@ -341,15 +379,21 @@ class Testcase:
         statuses = self.watch_statuses()
         for status in statuses:
             if not self.is_status_successful(status):
-                self.failure_msg += f"Check run {self.get_status_name(status)} was set to failure.\n"
+                self.failure_msg += (
+                    f"Check run {self.get_status_name(status)} was set to failure.\n"
+                )
 
     def watch_statuses(self):
         """
-        Watch the check runs 20 minutes, if all the check runs have completed status, return the check runs.
+        Watch the check runs 20 minutes, if all the check runs have completed
+        status, return the check runs.
         :return: list[CheckRun]
         """
         watch_end = datetime.now(tz=datetime.timezone.utc) + timedelta(seconds=60 * 20)
-        logging.info(f"Watching statuses for commit {self.head_commit}")
+        logging.info(
+            "Watching statuses for commit %s",
+            self.head_commit,
+        )
 
         while True:
             statuses = self.get_statuses()
@@ -358,7 +402,10 @@ class Testcase:
                 break
 
             if datetime.now(tz=datetime.timezone.utc) > watch_end:
-                self.failure_msg += "These check runs were not completed 20 minutes after Copr build had been built:\n"
+                self.failure_msg += (
+                    "These check runs were not completed 20 minutes"
+                    " after Copr build had been built:\n"
+                )
                 for status in statuses:
                     if not self.is_status_completed(status):
                         self.failure_msg += f"{self.get_status_name(status)}\n"
@@ -373,61 +420,52 @@ class Testcase:
         """
         Get the name of the (bot) account in GitHub/GitLab.
         """
-        return None
+        return
 
     def get_statuses(self) -> Union[list[GithubCheckRun], list[CommitFlag]]:
         """
         Get the statuses (checks in GitHub).
         """
-        pass
 
     def is_status_completed(self, status: Union[GithubCheckRun, CommitFlag]) -> bool:
         """
         Check whether the status is in completed state (e.g. success, failure).
         """
-        pass
 
     def is_status_successful(self, status: Union[GithubCheckRun, CommitFlag]) -> bool:
         """
         Check whether the status is in successful state.
         """
-        pass
 
     def delete_previous_branch(self, ref: str):
         """
         Delete the branch from the previous test run if it exists.
         """
-        pass
 
     def create_file_in_new_branch(self, branch: str):
         """
         Create a new branch and a new file in it via API (creates new commit).
         """
-        pass
 
     def update_file_and_commit(self, path: str, commit_msg: str, content: str, branch: str):
         """
         Update a file via API (creates new commit).
         """
-        pass
 
     def construct_copr_project_name(self) -> str:
         """
         Construct the Copr project name for the PR to check.
         """
-        pass
 
     def get_status_name(self, status: Union[GithubCheckRun, CommitFlag]) -> str:
         """
         Get the name of the status/check that is visible to user.
         """
-        pass
 
     def create_empty_commit(self, branch: str, commit_msg: str) -> str:
         """
         Create an empty commit via API.
         """
-        pass
 
 
 class GithubTestcase(Testcase):
@@ -517,7 +555,9 @@ class GitlabTestcase(Testcase):
         return f"gitlab.com-packit-service-hello-world-{self.pr.id}"
 
     def create_file_in_new_branch(self, branch: str):
-        self.pr_branch_ref = self.project.gitlab_repo.branches.create({"branch": branch, "ref": "master"})
+        self.pr_branch_ref = self.project.gitlab_repo.branches.create(
+            {"branch": branch, "ref": "master"},
+        )
 
         self.project.gitlab_repo.files.create(
             {
@@ -527,7 +567,7 @@ class GitlabTestcase(Testcase):
                 "author_email": "validation@packit.dev",
                 "author_name": "Packit Validation",
                 "commit_message": "Opened PR trigger",
-            }
+            },
         )
 
     def get_statuses(self) -> list[CommitFlag]:
@@ -571,7 +611,9 @@ class Tests:
 
     def run(self):
         logging.info("Run testcases where the build is triggered by a '/packit build' comment")
-        prs_for_comment = [pr for pr in self.project.get_pr_list() if pr.title.startswith("Basic test case:")]
+        prs_for_comment = [
+            pr for pr in self.project.get_pr_list() if pr.title.startswith("Basic test case:")
+        ]
         for pr in prs_for_comment:
             self.test_case_kls(
                 project=self.project,
@@ -582,7 +624,9 @@ class Tests:
 
         logging.info("Run testcase where the build is triggered by push")
         pr_for_push = [
-            pr for pr in self.project.get_pr_list() if pr.title.startswith(deployment.push_trigger_tests_prefix)
+            pr
+            for pr in self.project.get_pr_list()
+            if pr.title.startswith(deployment.push_trigger_tests_prefix)
         ]
         if pr_for_push:
             self.test_case_kls(
@@ -606,7 +650,10 @@ class GitlabTests(Tests):
         token_name="GITLAB_TOKEN",
     ):
         gitlab_service = GitlabService(token=getenv(token_name), instance_url=instance_url)
-        self.project: GitlabProject = gitlab_service.get_project(repo="hello-world", namespace=namespace)
+        self.project: GitlabProject = gitlab_service.get_project(
+            repo="hello-world",
+            namespace=namespace,
+        )
 
 
 class GithubTests(Tests):
@@ -626,7 +673,9 @@ if __name__ == "__main__":
         logging.warning("SENTRY_SECRET was not set!")
 
     deployment = (
-        ProductionInfo() if getenv("DEPLOYMENT", Deployment.production) == Deployment.production else StagingInfo()
+        ProductionInfo()
+        if getenv("DEPLOYMENT", Deployment.production) == Deployment.production
+        else StagingInfo()
     )
 
     if getenv("GITLAB_TOKEN"):
@@ -643,7 +692,10 @@ if __name__ == "__main__":
             token_name="GITLAB_GNOME_TOKEN",
         ).run()
     else:
-        logging.info("GITLAB_GNOME_TOKEN not set, skipping the validation for GitLab (gitlab.gnome.org instance).")
+        logging.info(
+            "GITLAB_GNOME_TOKEN not set, "
+            "skipping the validation for GitLab (gitlab.gnome.org instance).",
+        )
 
     if getenv("GITLAB_FREEDESKTOP_TOKEN"):
         logging.info("Running validation for GitLab (gitlab.freedesktop.org instance).")
@@ -654,7 +706,8 @@ if __name__ == "__main__":
         ).run()
     else:
         logging.info(
-            "GITLAB_FREEDESKTOP_TOKEN not set, skipping the validation for GitLab (gitlab.freedesktop.org instance)."
+            "GITLAB_FREEDESKTOP_TOKEN not set, "
+            "skipping the validation for GitLab (gitlab.freedesktop.org instance).",
         )
 
     if getenv("SALSA_DEBIAN_TOKEN"):
@@ -665,7 +718,10 @@ if __name__ == "__main__":
             token_name="SALSA_DEBIAN_TOKEN",
         ).run()
     else:
-        logging.info("SALSA_DEBIAN_TOKEN not set, skipping the validation for GitLab (salsa.debian.org instance).")
+        logging.info(
+            "SALSA_DEBIAN_TOKEN not set, "
+            "skipping the validation for GitLab (salsa.debian.org instance).",
+        )
 
     if getenv("GITHUB_TOKEN"):
         logging.info("Running validation for GitHub.")
