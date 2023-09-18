@@ -42,7 +42,7 @@ source = "vcs"
 raw-options.version_scheme = "post-release"
 
 [tool.hatch.build.targets.wheel]
-packages = ["validation"]
+packages = ["src/validation"]
 
 [[tool.hatch.envs.all.matrix]]
 python = ["3.9", "3.10", "3.11"]
