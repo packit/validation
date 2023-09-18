@@ -2,12 +2,13 @@ name: Build & push the validation image
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
-    paths:
-      - src/**
-      - Containerfile
+  # TODO: uncomment once the image can be built
+  # push:
+  #   branches:
+  #     - main
+  #   paths:
+  #     - src/**
+  #     - Containerfile
 
 jobs:
   build-and-push:
@@ -16,11 +17,6 @@ jobs:
 
     name: Build and push image
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include:
-          - image: import-images
-          - image: packit-service-validation
 
     env:
       path: cron-jobs/${{ matrix.image }}/
