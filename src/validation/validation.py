@@ -2,30 +2,26 @@
 # SPDX-License-Identifier: MIT
 
 import enum
-import time
 import logging
-
-from typing import Union, List, Optional, Type
-
-from gitlab import GitlabGetError
-from gitlab.v4.objects import ProjectBranch
+import time
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+from os import getenv
+from typing import Optional, Union
 
 from copr.v3 import Client
-from datetime import datetime, timedelta, date
-from os import getenv
-from dataclasses import dataclass
-
 from github import InputGitAuthor
 from github.Commit import Commit
 from github.GitRef import GitRef
-
+from gitlab import GitlabGetError
+from gitlab.v4.objects import ProjectBranch
 from ogr import GitlabService
-from ogr.services.github import GithubService, GithubProject
-from ogr.abstract import PullRequest, GitProject, CommitStatus, CommitFlag
+from ogr.abstract import CommitFlag, CommitStatus, GitProject, PullRequest
+from ogr.services.github import GithubProject, GithubService
 from ogr.services.github.check_run import (
-    GithubCheckRunStatus,
-    GithubCheckRunResult,
     GithubCheckRun,
+    GithubCheckRunResult,
+    GithubCheckRunStatus,
 )
 from ogr.services.gitlab import GitlabProject
 
@@ -141,7 +137,7 @@ class Testcase:
         :return:
         """
         branch = self.pr.source_branch
-        commit_msg = f"Commit build trigger ({date.today().strftime('%d/%m/%y')})"
+        commit_msg = f"Commit build trigger ({datetime.now(tz=datetime.timezone.utc).strftime('%d/%m/%y')})"
         self.head_commit = self.create_empty_commit(branch, commit_msg)
 
     def create_pr(self):
@@ -192,19 +188,19 @@ class Testcase:
         """
         status_names = [self.get_status_name(status) for status in self.get_statuses()]
 
-        watch_end = datetime.now() + timedelta(seconds=60)
+        watch_end = datetime.now(tz=datetime.timezone.utc) + timedelta(seconds=60)
         failure_message = "Github check runs were not set to queued in time 1 minute.\n"
 
         # when a new PR is opened
         while len(status_names) == 0:
-            if datetime.now() > watch_end:
+            if datetime.now(tz=datetime.timezone.utc) > watch_end:
                 self.failure_msg += failure_message
                 return
             status_names = [self.get_status_name(status) for status in self.get_statuses()]
 
         logging.info(f"Watching pending statuses for commit {self.head_commit}")
         while True:
-            if datetime.now() > watch_end:
+            if datetime.now(tz=datetime.timezone.utc) > watch_end:
                 self.failure_msg += failure_message
                 return
 
@@ -237,13 +233,13 @@ class Testcase:
 
         self.trigger_build()
 
-        watch_end = datetime.now() + timedelta(seconds=60 * 15)
+        watch_end = datetime.now(tz=datetime.timezone.utc) + timedelta(seconds=60 * 15)
 
         self.check_pending_check_runs()
 
         logging.info(f"Watching whether a build has been submitted for {self.pr} in {self.copr_project_name}")
         while True:
-            if datetime.now() > watch_end:
+            if datetime.now(tz=datetime.timezone.utc) > watch_end:
                 self.failure_msg += "The build was not submitted in Copr in time 15 minutes.\n"
                 return None
 
@@ -251,6 +247,7 @@ class Testcase:
                 new_builds = copr.build_proxy.get_list(self.deployment.copr_user, self.copr_project_name)
             except Exception:
                 # project does not exist yet
+                logging.info("Copr project doesn't exist yet")
                 continue
 
             if len(new_builds) >= old_build_len + 1:
@@ -262,7 +259,7 @@ class Testcase:
             if len(new_comments) > 1:
                 comment = [comment.body for comment in new_comments if comment.author == self.account_name]
                 if len(comment) > 0:
-                    self.failure_msg += f"New github comment from p-s while " f"submitting Copr build: {comment[0]}\n"
+                    self.failure_msg += f"New github comment from p-s while submitting Copr build: {comment[0]}\n"
 
             time.sleep(30)
 
@@ -272,12 +269,12 @@ class Testcase:
         :param build_id: ID of the build
         :return:
         """
-        watch_end = datetime.now() + timedelta(seconds=60 * 15)
+        watch_end = datetime.now(tz=datetime.timezone.utc) + timedelta(seconds=60 * 15)
         state_reported = ""
         logging.info(f"Watching Copr build {build_id}")
 
         while True:
-            if datetime.now() > watch_end:
+            if datetime.now(tz=datetime.timezone.utc) > watch_end:
                 self.failure_msg += "The build did not finish in time 15 minutes.\n"
                 return
 
@@ -296,7 +293,7 @@ class Testcase:
                 "waiting",
             ]:
                 if state_reported != "succeeded":
-                    self.failure_msg += f"The build in Copr was not successful. " f"Copr state: {state_reported}.\n"
+                    self.failure_msg += f"The build in Copr was not successful. Copr state: {state_reported}.\n"
                 return
 
             time.sleep(30)
@@ -349,9 +346,9 @@ class Testcase:
     def watch_statuses(self):
         """
         Watch the check runs 20 minutes, if all the check runs have completed status, return the check runs.
-        :return: List[CheckRun]
+        :return: list[CheckRun]
         """
-        watch_end = datetime.now() + timedelta(seconds=60 * 20)
+        watch_end = datetime.now(tz=datetime.timezone.utc) + timedelta(seconds=60 * 20)
         logging.info(f"Watching statuses for commit {self.head_commit}")
 
         while True:
@@ -360,10 +357,8 @@ class Testcase:
             if all(self.is_status_completed(status) for status in statuses):
                 break
 
-            if datetime.now() > watch_end:
-                self.failure_msg += (
-                    "These check runs were not completed 20 minutes " "after Copr build had been built:\n"
-                )
+            if datetime.now(tz=datetime.timezone.utc) > watch_end:
+                self.failure_msg += "These check runs were not completed 20 minutes after Copr build had been built:\n"
                 for status in statuses:
                     if not self.is_status_completed(status):
                         self.failure_msg += f"{self.get_status_name(status)}\n"
@@ -380,7 +375,7 @@ class Testcase:
         """
         return None
 
-    def get_statuses(self) -> Union[List[GithubCheckRun], List[CommitFlag]]:
+    def get_statuses(self) -> Union[list[GithubCheckRun], list[CommitFlag]]:
         """
         Get the statuses (checks in GitHub).
         """
@@ -464,7 +459,7 @@ class GithubTestcase(Testcase):
         )["commit"]
         return commit.sha
 
-    def get_statuses(self) -> List[GithubCheckRun]:
+    def get_statuses(self) -> list[GithubCheckRun]:
         return [
             check_run
             for check_run in self.project.get_check_runs(commit_sha=self.head_commit)
@@ -535,7 +530,7 @@ class GitlabTestcase(Testcase):
             }
         )
 
-    def get_statuses(self) -> List[CommitFlag]:
+    def get_statuses(self) -> list[CommitFlag]:
         return [
             status
             for status in self.project.get_commit_statuses(commit=self.head_commit)
@@ -572,7 +567,7 @@ class GitlabTestcase(Testcase):
 
 class Tests:
     project: GitProject
-    test_case_kls: Type
+    test_case_kls: type
 
     def run(self):
         logging.info("Run testcases where the build is triggered by a '/packit build' comment")
