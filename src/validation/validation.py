@@ -1,7 +1,6 @@
 # Copyright Contributors to the Packit project.
 # SPDX-License-Identifier: MIT
 
-import enum
 import logging
 import time
 from datetime import datetime, timedelta
@@ -25,15 +24,10 @@ from ogr.services.github.check_run import (
 from ogr.services.gitlab import GitlabProject
 
 from validation.deployment import DEPLOYMENT, DeploymentInfo, ProductionInfo
+from validation.utils.trigger import Trigger
 
 copr = Client({"copr_url": "https://copr.fedorainfracloud.org"})
 logging.basicConfig(level=logging.INFO)
-
-
-class Trigger(str, enum.Enum):
-    comment = "comment"
-    pr_opened = "pr_opened"
-    push = "push"
 
 
 class Testcase:
