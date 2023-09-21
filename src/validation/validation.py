@@ -4,7 +4,6 @@
 import enum
 import logging
 import time
-from dataclasses import dataclass
 from datetime import datetime, timedelta
 from os import getenv
 from typing import Optional, Union
@@ -25,53 +24,10 @@ from ogr.services.github.check_run import (
 )
 from ogr.services.gitlab import GitlabProject
 
+from validation.deployment import DEPLOYMENT, DeploymentInfo, ProductionInfo
+
 copr = Client({"copr_url": "https://copr.fedorainfracloud.org"})
 logging.basicConfig(level=logging.INFO)
-
-
-# Everywhere else in the deployment repo environments are called 'prod' and 'stg'.
-# Call them some other name here to avoid accidentally deploying the wrong thing.
-class Deployment(str, enum.Enum):
-    production = "production"
-    staging = "staging"
-
-
-@dataclass
-class YamlFix:
-    from_str: str = ""
-    to_str: str = ""
-    git_msg: str = ""
-
-
-@dataclass
-class ProductionInfo:
-    name: str = "prod"
-    app_name: str = "Packit-as-a-Service"
-    pr_comment: str = "/packit build"
-    opened_pr_trigger__packit_yaml_fix: YamlFix = None
-    copr_user = "packit"
-    push_trigger_tests_prefix = "Basic test case - push trigger"
-    github_bot_name = "packit-as-a-service[bot]"
-    gitlab_account_name = "packit-as-a-service"
-
-
-@dataclass
-class StagingInfo:
-    name: str = "stg"
-    app_name = "Packit-as-a-Service-stg"
-    pr_comment = "/packit-stg build"
-    opened_pr_trigger__packit_yaml_fix = YamlFix(
-        "---",
-        '---\npackit_instances: ["stg"]',
-        "Build using Packit-stg",
-    )
-    copr_user = "packit-stg"
-    push_trigger_tests_prefix = "Basic test case (stg) - push trigger"
-    github_bot_name = "packit-as-a-service-stg[bot]"
-    gitlab_account_name = "packit-as-a-service-stg"
-
-
-DeploymentInfo = Union[ProductionInfo, StagingInfo]
 
 
 class Trigger(str, enum.Enum):
@@ -619,25 +575,25 @@ class Tests:
                 project=self.project,
                 pr=pr,
                 trigger=Trigger.comment,
-                deployment=deployment,
+                deployment=DEPLOYMENT,
             ).run_test()
 
         logging.info("Run testcase where the build is triggered by push")
         pr_for_push = [
             pr
             for pr in self.project.get_pr_list()
-            if pr.title.startswith(deployment.push_trigger_tests_prefix)
+            if pr.title.startswith(DEPLOYMENT.push_trigger_tests_prefix)
         ]
         if pr_for_push:
             self.test_case_kls(
                 project=self.project,
                 pr=pr_for_push[0],
                 trigger=Trigger.push,
-                deployment=deployment,
+                deployment=DEPLOYMENT,
             ).run_test()
 
         logging.info("Run testcase where the build is triggered by opening a new PR")
-        self.test_case_kls(project=self.project, deployment=deployment).run_test()
+        self.test_case_kls(project=self.project, deployment=DEPLOYMENT).run_test()
 
 
 class GitlabTests(Tests):
@@ -671,12 +627,6 @@ if __name__ == "__main__":
         sentry_sdk.init(sentry_secret)
     else:
         logging.warning("SENTRY_SECRET was not set!")
-
-    deployment = (
-        ProductionInfo()
-        if getenv("DEPLOYMENT", Deployment.production) == Deployment.production
-        else StagingInfo()
-    )
 
     if getenv("GITLAB_TOKEN"):
         logging.info("Running validation for GitLab.")
