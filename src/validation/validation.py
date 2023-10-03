@@ -4,76 +4,10 @@
 import logging
 from os import getenv
 
-from ogr import GitlabService
-from ogr.abstract import GitProject
-from ogr.services.github import GithubService
-from ogr.services.gitlab import GitlabProject
-
-from validation.deployment import DEPLOYMENT
-from validation.testcase.github import GithubTestcase
-from validation.testcase.gitlab import GitlabTestcase
-from validation.utils.trigger import Trigger
+from validation.tests.github import GithubTests
+from validation.tests.gitlab import GitlabTests
 
 logging.basicConfig(level=logging.INFO)
-
-
-class Tests:
-    project: GitProject
-    test_case_kls: type
-
-    def run(self):
-        logging.info("Run testcases where the build is triggered by a '/packit build' comment")
-        prs_for_comment = [
-            pr for pr in self.project.get_pr_list() if pr.title.startswith("Basic test case:")
-        ]
-        for pr in prs_for_comment:
-            self.test_case_kls(
-                project=self.project,
-                pr=pr,
-                trigger=Trigger.comment,
-                deployment=DEPLOYMENT,
-            ).run_test()
-
-        logging.info("Run testcase where the build is triggered by push")
-        pr_for_push = [
-            pr
-            for pr in self.project.get_pr_list()
-            if pr.title.startswith(DEPLOYMENT.push_trigger_tests_prefix)
-        ]
-        if pr_for_push:
-            self.test_case_kls(
-                project=self.project,
-                pr=pr_for_push[0],
-                trigger=Trigger.push,
-                deployment=DEPLOYMENT,
-            ).run_test()
-
-        logging.info("Run testcase where the build is triggered by opening a new PR")
-        self.test_case_kls(project=self.project, deployment=DEPLOYMENT).run_test()
-
-
-class GitlabTests(Tests):
-    test_case_kls = GitlabTestcase
-
-    def __init__(
-        self,
-        instance_url="https://gitlab.com",
-        namespace="packit-service",
-        token_name="GITLAB_TOKEN",
-    ):
-        gitlab_service = GitlabService(token=getenv(token_name), instance_url=instance_url)
-        self.project: GitlabProject = gitlab_service.get_project(
-            repo="hello-world",
-            namespace=namespace,
-        )
-
-
-class GithubTests(Tests):
-    test_case_kls = GithubTestcase
-
-    def __init__(self):
-        github_service = GithubService(token=getenv("GITHUB_TOKEN"))
-        self.project = github_service.get_project(repo="hello-world", namespace="packit")
 
 
 if __name__ == "__main__":
