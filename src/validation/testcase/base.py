@@ -12,7 +12,7 @@ from gitlab.v4.objects import ProjectBranch
 from ogr.abstract import CommitFlag, GitProject, PullRequest
 from ogr.services.github.check_run import GithubCheckRun
 
-from validation.deployment import DeploymentInfo, ProductionInfo
+from validation.deployment import PRODUCTION_INFO, DeploymentInfo
 from validation.helpers import copr, log_failure
 from validation.utils.trigger import Trigger
 
@@ -32,7 +32,7 @@ class Testcase:
         self.trigger = trigger
         self.head_commit = pr.head_commit if pr else None
         self._copr_project_name = None
-        self.deployment = deployment or ProductionInfo()
+        self.deployment = deployment or PRODUCTION_INFO
 
     @property
     def copr_project_name(self):
