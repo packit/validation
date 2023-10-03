@@ -39,7 +39,7 @@ PRODUCTION_INFO = DeploymentInfo(
     pr_comment="/packit build",
     opened_pr_trigger__packit_yaml_fix=None,
     copr_user="packit",
-    push_trigger_tests_prefix="Basic test case - push trigger",
+    push_trigger_tests_prefix="Basic test case (prod): push trigger",
     github_bot_name="packit-as-a-service[bot]",
     gitlab_account_name="packit-as-a-service",
 )
@@ -53,7 +53,7 @@ STAGING_INFO = DeploymentInfo(
         git_msg="Build using Packit-stg",
     ),
     copr_user="packit-stg",
-    push_trigger_tests_prefix="Basic test case (stg) - push trigger",
+    push_trigger_tests_prefix="Basic test case (stg): push trigger",
     github_bot_name="packit-as-a-service-stg[bot]",
     gitlab_account_name="packit-as-a-service-stg",
 )

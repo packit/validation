@@ -94,7 +94,7 @@ class Testcase:
         :return:
         """
         source_branch = f"test/{self.deployment.name}/opened_pr"
-        pr_title = f"Basic test case ({self.deployment.name}) - opened PR trigger"
+        pr_title = f"Basic test case ({self.deployment.name}): opened PR trigger"
         self.delete_previous_branch(source_branch)
         # Delete the PR from the previous test run if it exists.
         existing_pr = [pr for pr in self.project.get_pr_list() if pr.title == pr_title]
