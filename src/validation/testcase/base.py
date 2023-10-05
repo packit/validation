@@ -1,83 +1,20 @@
-# Copyright Contributors to the Packit project.
+# SPDX-FileCopyrightText: 2023-present Contributors to the Packit Project.
+#
 # SPDX-License-Identifier: MIT
 
-import enum
 import logging
 import time
-from dataclasses import dataclass
 from datetime import datetime, timedelta
-from os import getenv
 from typing import Optional, Union
 
-from copr.v3 import Client
-from github import InputGitAuthor
-from github.Commit import Commit
 from github.GitRef import GitRef
-from gitlab import GitlabGetError
 from gitlab.v4.objects import ProjectBranch
-from ogr import GitlabService
-from ogr.abstract import CommitFlag, CommitStatus, GitProject, PullRequest
-from ogr.services.github import GithubProject, GithubService
-from ogr.services.github.check_run import (
-    GithubCheckRun,
-    GithubCheckRunResult,
-    GithubCheckRunStatus,
-)
-from ogr.services.gitlab import GitlabProject
+from ogr.abstract import CommitFlag, GitProject, PullRequest
+from ogr.services.github.check_run import GithubCheckRun
 
-copr = Client({"copr_url": "https://copr.fedorainfracloud.org"})
-logging.basicConfig(level=logging.INFO)
-
-
-# Everywhere else in the deployment repo environments are called 'prod' and 'stg'.
-# Call them some other name here to avoid accidentally deploying the wrong thing.
-class Deployment(str, enum.Enum):
-    production = "production"
-    staging = "staging"
-
-
-@dataclass
-class YamlFix:
-    from_str: str = ""
-    to_str: str = ""
-    git_msg: str = ""
-
-
-@dataclass
-class ProductionInfo:
-    name: str = "prod"
-    app_name: str = "Packit-as-a-Service"
-    pr_comment: str = "/packit build"
-    opened_pr_trigger__packit_yaml_fix: YamlFix = None
-    copr_user = "packit"
-    push_trigger_tests_prefix = "Basic test case - push trigger"
-    github_bot_name = "packit-as-a-service[bot]"
-    gitlab_account_name = "packit-as-a-service"
-
-
-@dataclass
-class StagingInfo:
-    name: str = "stg"
-    app_name = "Packit-as-a-Service-stg"
-    pr_comment = "/packit-stg build"
-    opened_pr_trigger__packit_yaml_fix = YamlFix(
-        "---",
-        '---\npackit_instances: ["stg"]',
-        "Build using Packit-stg",
-    )
-    copr_user = "packit-stg"
-    push_trigger_tests_prefix = "Basic test case (stg) - push trigger"
-    github_bot_name = "packit-as-a-service-stg[bot]"
-    gitlab_account_name = "packit-as-a-service-stg"
-
-
-DeploymentInfo = Union[ProductionInfo, StagingInfo]
-
-
-class Trigger(str, enum.Enum):
-    comment = "comment"
-    pr_opened = "pr_opened"
-    push = "push"
+from validation.deployment import PRODUCTION_INFO, DeploymentInfo
+from validation.helpers import copr, log_failure
+from validation.utils.trigger import Trigger
 
 
 class Testcase:
@@ -95,7 +32,7 @@ class Testcase:
         self.trigger = trigger
         self.head_commit = pr.head_commit if pr else None
         self._copr_project_name = None
-        self.deployment = deployment or ProductionInfo()
+        self.deployment = deployment or PRODUCTION_INFO
 
     @property
     def copr_project_name(self):
@@ -116,9 +53,8 @@ class Testcase:
         self.run_checks()
         if self.failure_msg:
             message = f"{self.pr.title} ({self.pr.url}) failed: {self.failure_msg}"
-            sentry_sdk.capture_message(message) if getenv("SENTRY_SECRET") else logging.warning(
-                message,
-            )
+
+            log_failure(message)
 
         if self.trigger == Trigger.pr_opened:
             self.pr.close()
@@ -158,7 +94,7 @@ class Testcase:
         :return:
         """
         source_branch = f"test/{self.deployment.name}/opened_pr"
-        pr_title = f"Basic test case ({self.deployment.name}) - opened PR trigger"
+        pr_title = f"Basic test case ({self.deployment.name}): opened PR trigger"
         self.delete_previous_branch(source_branch)
         # Delete the PR from the previous test run if it exists.
         existing_pr = [pr for pr in self.project.get_pr_list() if pr.title == pr_title]
@@ -241,7 +177,7 @@ class Testcase:
         if self.pr:
             try:
                 old_build_len = len(
-                    copr.build_proxy.get_list(self.deployment.copr_user, self.copr_project_name),
+                    copr().build_proxy.get_list(self.deployment.copr_user, self.copr_project_name),
                 )
             except Exception:
                 old_build_len = 0
@@ -269,7 +205,7 @@ class Testcase:
                 return None
 
             try:
-                new_builds = copr.build_proxy.get_list(
+                new_builds = copr().build_proxy.get_list(
                     self.deployment.copr_user,
                     self.copr_project_name,
                 )
@@ -310,7 +246,7 @@ class Testcase:
                 self.failure_msg += "The build did not finish in time 15 minutes.\n"
                 return
 
-            build = copr.build_proxy.get(build_id)
+            build = copr().build_proxy.get(build_id)
             if build.state == state_reported:
                 time.sleep(20)
                 continue
@@ -466,265 +402,3 @@ class Testcase:
         """
         Create an empty commit via API.
         """
-
-
-class GithubTestcase(Testcase):
-    project: GithubProject
-    user = InputGitAuthor(name="Release Bot", email="user-cont-team+release-bot@redhat.com")
-
-    @property
-    def account_name(self):
-        return self.deployment.github_bot_name
-
-    def get_status_name(self, status: GithubCheckRun) -> str:
-        return status.name
-
-    def construct_copr_project_name(self) -> str:
-        return f"packit-hello-world-{self.pr.id}"
-
-    def create_empty_commit(self, branch: str, commit_msg: str) -> str:
-        contents = self.project.github_repo.get_contents("test.txt", ref=branch)
-        # https://pygithub.readthedocs.io/en/latest/examples/Repository.html#update-a-file-in-the-repository
-        # allows empty commit (always the same content of file)
-        commit: Commit = self.project.github_repo.update_file(
-            path=contents.path,
-            message=commit_msg,
-            content="Testing the push trigger.",
-            sha=contents.sha,
-            branch=branch,
-            committer=self.user,
-            author=self.user,
-        )["commit"]
-        return commit.sha
-
-    def get_statuses(self) -> list[GithubCheckRun]:
-        return [
-            check_run
-            for check_run in self.project.get_check_runs(commit_sha=self.head_commit)
-            if check_run.app.name == self.deployment.app_name
-        ]
-
-    def is_status_successful(self, status: GithubCheckRun) -> bool:
-        return status.conclusion == GithubCheckRunResult.success
-
-    def is_status_completed(self, status: GithubCheckRun) -> bool:
-        return status.status == GithubCheckRunStatus.completed
-
-    def delete_previous_branch(self, branch: str):
-        existing_branch = self.project.github_repo.get_git_matching_refs(f"heads/{branch}")
-        if existing_branch.totalCount:
-            existing_branch[0].delete()
-
-    def create_file_in_new_branch(self, branch: str):
-        commit = self.project.github_repo.get_commit("HEAD")
-        ref = f"refs/heads/{branch}"
-        self.pr_branch_ref = self.project.github_repo.create_git_ref(ref, commit.sha)
-        self.project.github_repo.create_file(
-            path="test.txt",
-            message="Opened PR trigger",
-            content="Testing the opened PR trigger.",
-            branch=branch,
-            committer=self.user,
-            author=self.user,
-        )
-
-    def update_file_and_commit(self, path: str, commit_msg: str, content: str, branch: str):
-        contents = self.project.github_repo.get_contents(path=path, ref=branch)
-        self.project.github_repo.update_file(
-            path,
-            commit_msg,
-            content,
-            contents.sha,
-            branch=branch,
-            committer=self.user,
-            author=self.user,
-        )
-
-
-class GitlabTestcase(Testcase):
-    project: GitlabProject
-
-    @property
-    def account_name(self):
-        return self.deployment.gitlab_account_name
-
-    def get_status_name(self, status: CommitFlag) -> str:
-        return status.context
-
-    def construct_copr_project_name(self) -> str:
-        return f"gitlab.com-packit-service-hello-world-{self.pr.id}"
-
-    def create_file_in_new_branch(self, branch: str):
-        self.pr_branch_ref = self.project.gitlab_repo.branches.create(
-            {"branch": branch, "ref": "master"},
-        )
-
-        self.project.gitlab_repo.files.create(
-            {
-                "file_path": "test.txt",
-                "branch": branch,
-                "content": "Testing the opened PR trigger.",
-                "author_email": "validation@packit.dev",
-                "author_name": "Packit Validation",
-                "commit_message": "Opened PR trigger",
-            },
-        )
-
-    def get_statuses(self) -> list[CommitFlag]:
-        return [
-            status
-            for status in self.project.get_commit_statuses(commit=self.head_commit)
-            if status._raw_commit_flag.author["username"] == self.account_name
-        ]
-
-    def is_status_successful(self, status: CommitFlag) -> bool:
-        return status.state == CommitStatus.success
-
-    def is_status_completed(self, status: CommitFlag) -> bool:
-        return status.state not in [
-            CommitStatus.running,
-            CommitStatus.pending,
-        ]
-
-    def delete_previous_branch(self, branch: str):
-        try:
-            existing_branch = self.project.gitlab_repo.branches.get(branch)
-        except GitlabGetError:
-            return
-
-        existing_branch.delete()
-
-    def update_file_and_commit(self, path: str, commit_msg: str, content: str, branch: str):
-        file = self.project.gitlab_repo.files.get(file_path=path, ref=branch)
-        file.content = content
-        file.save(branch=branch, commit_message=commit_msg)
-
-    def create_empty_commit(self, branch: str, commit_msg: str) -> str:
-        data = {"branch": branch, "commit_message": commit_msg, "actions": []}
-        commit = self.project.gitlab_repo.commits.create(data)
-        return commit.id
-
-
-class Tests:
-    project: GitProject
-    test_case_kls: type
-
-    def run(self):
-        logging.info("Run testcases where the build is triggered by a '/packit build' comment")
-        prs_for_comment = [
-            pr for pr in self.project.get_pr_list() if pr.title.startswith("Basic test case:")
-        ]
-        for pr in prs_for_comment:
-            self.test_case_kls(
-                project=self.project,
-                pr=pr,
-                trigger=Trigger.comment,
-                deployment=deployment,
-            ).run_test()
-
-        logging.info("Run testcase where the build is triggered by push")
-        pr_for_push = [
-            pr
-            for pr in self.project.get_pr_list()
-            if pr.title.startswith(deployment.push_trigger_tests_prefix)
-        ]
-        if pr_for_push:
-            self.test_case_kls(
-                project=self.project,
-                pr=pr_for_push[0],
-                trigger=Trigger.push,
-                deployment=deployment,
-            ).run_test()
-
-        logging.info("Run testcase where the build is triggered by opening a new PR")
-        self.test_case_kls(project=self.project, deployment=deployment).run_test()
-
-
-class GitlabTests(Tests):
-    test_case_kls = GitlabTestcase
-
-    def __init__(
-        self,
-        instance_url="https://gitlab.com",
-        namespace="packit-service",
-        token_name="GITLAB_TOKEN",
-    ):
-        gitlab_service = GitlabService(token=getenv(token_name), instance_url=instance_url)
-        self.project: GitlabProject = gitlab_service.get_project(
-            repo="hello-world",
-            namespace=namespace,
-        )
-
-
-class GithubTests(Tests):
-    test_case_kls = GithubTestcase
-
-    def __init__(self):
-        github_service = GithubService(token=getenv("GITHUB_TOKEN"))
-        self.project = github_service.get_project(repo="hello-world", namespace="packit")
-
-
-if __name__ == "__main__":
-    if sentry_secret := getenv("SENTRY_SECRET"):
-        import sentry_sdk
-
-        sentry_sdk.init(sentry_secret)
-    else:
-        logging.warning("SENTRY_SECRET was not set!")
-
-    deployment = (
-        ProductionInfo()
-        if getenv("DEPLOYMENT", Deployment.production) == Deployment.production
-        else StagingInfo()
-    )
-
-    if getenv("GITLAB_TOKEN"):
-        logging.info("Running validation for GitLab.")
-        GitlabTests().run()
-    else:
-        logging.info("GITLAB_TOKEN not set, skipping the validation for GitLab.")
-
-    if getenv("GITLAB_GNOME_TOKEN"):
-        logging.info("Running validation for GitLab (gitlab.gnome.org instance).")
-        GitlabTests(
-            instance_url="https://gitlab.gnome.org/",
-            namespace="packit-validation",
-            token_name="GITLAB_GNOME_TOKEN",
-        ).run()
-    else:
-        logging.info(
-            "GITLAB_GNOME_TOKEN not set, "
-            "skipping the validation for GitLab (gitlab.gnome.org instance).",
-        )
-
-    if getenv("GITLAB_FREEDESKTOP_TOKEN"):
-        logging.info("Running validation for GitLab (gitlab.freedesktop.org instance).")
-        GitlabTests(
-            instance_url="https://gitlab.freedesktop.org/",
-            namespace="packit-service",
-            token_name="GITLAB_FREEDESKTOP_TOKEN",
-        ).run()
-    else:
-        logging.info(
-            "GITLAB_FREEDESKTOP_TOKEN not set, "
-            "skipping the validation for GitLab (gitlab.freedesktop.org instance).",
-        )
-
-    if getenv("SALSA_DEBIAN_TOKEN"):
-        logging.info("Running validation for GitLab (salsa.debian.org instance).")
-        GitlabTests(
-            instance_url="https://salsa.debian.org/",
-            namespace="packit-validation",
-            token_name="SALSA_DEBIAN_TOKEN",
-        ).run()
-    else:
-        logging.info(
-            "SALSA_DEBIAN_TOKEN not set, "
-            "skipping the validation for GitLab (salsa.debian.org instance).",
-        )
-
-    if getenv("GITHUB_TOKEN"):
-        logging.info("Running validation for GitHub.")
-        GithubTests().run()
-    else:
-        logging.info("GITHUB_TOKEN not set, skipping the validation for GitHub.")
