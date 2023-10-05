@@ -2,13 +2,12 @@ name: Build & push the validation image
 
 on:
   workflow_dispatch:
-  # TODO: uncomment once the image can be built
-  # push:
-  #   branches:
-  #     - main
-  #   paths:
-  #     - src/**
-  #     - Containerfile
+  push:
+    branches:
+      - main
+    paths:
+      - src/**
+      - Containerfile
 
 jobs:
   build-and-push:
