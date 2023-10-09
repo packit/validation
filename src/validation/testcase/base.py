@@ -4,7 +4,7 @@
 
 import logging
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Union
 
 from github.GitRef import GitRef
@@ -82,9 +82,7 @@ class Testcase:
         :return:
         """
         branch = self.pr.source_branch
-        commit_msg = (
-            f"Commit build trigger ({datetime.now(tz=datetime.timezone.utc).strftime('%d/%m/%y')})"
-        )
+        commit_msg = f"Commit build trigger ({datetime.now(tz=timezone.utc).strftime('%d/%m/%y')})"
         self.head_commit = self.create_empty_commit(branch, commit_msg)
 
     def create_pr(self):
@@ -135,12 +133,12 @@ class Testcase:
         """
         status_names = [self.get_status_name(status) for status in self.get_statuses()]
 
-        watch_end = datetime.now(tz=datetime.timezone.utc) + timedelta(seconds=60)
+        watch_end = datetime.now(tz=timezone.utc) + timedelta(seconds=60)
         failure_message = "Github check runs were not set to queued in time 1 minute.\n"
 
         # when a new PR is opened
         while len(status_names) == 0:
-            if datetime.now(tz=datetime.timezone.utc) > watch_end:
+            if datetime.now(tz=timezone.utc) > watch_end:
                 self.failure_msg += failure_message
                 return
             status_names = [self.get_status_name(status) for status in self.get_statuses()]
@@ -150,7 +148,7 @@ class Testcase:
             self.head_commit,
         )
         while True:
-            if datetime.now(tz=datetime.timezone.utc) > watch_end:
+            if datetime.now(tz=timezone.utc) > watch_end:
                 self.failure_msg += failure_message
                 return
 
@@ -190,7 +188,7 @@ class Testcase:
 
         self.trigger_build()
 
-        watch_end = datetime.now(tz=datetime.timezone.utc) + timedelta(seconds=60 * 15)
+        watch_end = datetime.now(tz=timezone.utc) + timedelta(seconds=60 * 15)
 
         self.check_pending_check_runs()
 
@@ -200,7 +198,7 @@ class Testcase:
             self.copr_project_name,
         )
         while True:
-            if datetime.now(tz=datetime.timezone.utc) > watch_end:
+            if datetime.now(tz=timezone.utc) > watch_end:
                 self.failure_msg += "The build was not submitted in Copr in time 15 minutes.\n"
                 return None
 
@@ -237,12 +235,12 @@ class Testcase:
         :param build_id: ID of the build
         :return:
         """
-        watch_end = datetime.now(tz=datetime.timezone.utc) + timedelta(seconds=60 * 15)
+        watch_end = datetime.now(tz=timezone.utc) + timedelta(seconds=60 * 15)
         state_reported = ""
         logging.info("Watching Copr build %s", build_id)
 
         while True:
-            if datetime.now(tz=datetime.timezone.utc) > watch_end:
+            if datetime.now(tz=timezone.utc) > watch_end:
                 self.failure_msg += "The build did not finish in time 15 minutes.\n"
                 return
 
@@ -325,7 +323,7 @@ class Testcase:
         status, return the check runs.
         :return: list[CheckRun]
         """
-        watch_end = datetime.now(tz=datetime.timezone.utc) + timedelta(seconds=60 * 20)
+        watch_end = datetime.now(tz=timezone.utc) + timedelta(seconds=60 * 20)
         logging.info(
             "Watching statuses for commit %s",
             self.head_commit,
@@ -337,7 +335,7 @@ class Testcase:
             if all(self.is_status_completed(status) for status in statuses):
                 break
 
-            if datetime.now(tz=datetime.timezone.utc) > watch_end:
+            if datetime.now(tz=timezone.utc) > watch_end:
                 self.failure_msg += (
                     "These check runs were not completed 20 minutes"
                     " after Copr build had been built:\n"
