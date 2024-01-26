@@ -126,6 +126,10 @@ unfixable = [
   # Don't touch unused imports
   "F401",
 ]
+allowed-confusables = [
+  "«", "»",
+  "‹", "›",
+]
 
 [tool.ruff.isort]
 known-first-party = ["validation"]
