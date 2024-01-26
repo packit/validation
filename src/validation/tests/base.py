@@ -15,7 +15,20 @@ class Tests:
     test_case_kls: type
 
     def run(self):
-        logging.info("Run testcases where the build is triggered by a '/packit build' comment")
+        logging.info("Run testcases where the build is triggered by a ‹vm-image-build› comment")
+        prs_for_comment = [
+            pr for pr in self.project.get_pr_list() if pr.title.startswith("Test VM Image builds")
+        ]
+        for pr in prs_for_comment:
+            self.test_case_kls(
+                project=self.project,
+                pr=pr,
+                trigger=Trigger.comment,
+                deployment=DEPLOYMENT,
+                comment=DEPLOYMENT.pr_comment_vm_image_build,
+            ).run_test()
+
+        logging.info("Run testcases where the build is triggered by a ‹build› comment")
         prs_for_comment = [
             pr for pr in self.project.get_pr_list() if pr.title.startswith("Basic test case:")
         ]

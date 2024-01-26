@@ -21,9 +21,10 @@ class Testcase:
     def __init__(
         self,
         project: GitProject,
-        pr: PullRequest = None,
+        pr: PullRequest | None = None,
         trigger: Trigger = Trigger.pr_opened,
-        deployment: DeploymentInfo = None,
+        deployment: DeploymentInfo | None = None,
+        comment: str | None = None,
     ):
         self.project = project
         self.pr = pr
@@ -33,6 +34,7 @@ class Testcase:
         self.head_commit = pr.head_commit if pr else None
         self._copr_project_name = None
         self.deployment = deployment or PRODUCTION_INFO
+        self.comment = comment
 
     @property
     def copr_project_name(self):
@@ -70,7 +72,8 @@ class Testcase:
             self.pr if self.pr else "new PR",
         )
         if self.trigger == Trigger.comment:
-            self.pr.comment(self.deployment.pr_comment)
+            comment = self.comment or self.deployment.pr_comment
+            self.pr.comment(comment)
         elif self.trigger == Trigger.push:
             self.push_to_pr()
         else:
