@@ -52,15 +52,19 @@ class Testcase:
         opening PR close it.
         :return:
         """
-        self.run_checks()
-        if self.failure_msg:
-            message = f"{self.pr.title} ({self.pr.url}) failed: {self.failure_msg}"
+        try:
+            self.run_checks()
+            if self.failure_msg:
+                message = f"{self.pr.title} ({self.pr.url}) failed: {self.failure_msg}"
 
-            log_failure(message)
+                log_failure(message)
 
-        if self.trigger == Trigger.pr_opened:
-            self.pr.close()
-            self.pr_branch_ref.delete()
+            if self.trigger == Trigger.pr_opened:
+                self.pr.close()
+                self.pr_branch_ref.delete()
+        except Exception as e:
+            msg = f"Validation test {self.pr.title} ({self.pr.url}) failed: {e}"
+            logging.error(msg)
 
     def trigger_build(self):
         """
@@ -210,9 +214,10 @@ class Testcase:
                     self.deployment.copr_user,
                     self.copr_project_name,
                 )
-            except Exception:
+            except Exception as e:
                 # project does not exist yet
-                logging.info("Copr project doesn't exist yet")
+                msg = f"Copr project doesn't exist yet: {e}"
+                logging.warning(msg)
                 continue
 
             if len(new_builds) >= old_build_len + 1:

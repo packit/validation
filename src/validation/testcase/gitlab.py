@@ -20,7 +20,7 @@ class GitlabTestcase(Testcase):
         return status.context
 
     def construct_copr_project_name(self) -> str:
-        return f"gitlab.com-packit-service-hello-world-{self.pr.id}"
+        return f"{self.project.service.hostname}-{self.project.namespace}-hello-world-{self.pr.id}"
 
     def create_file_in_new_branch(self, branch: str):
         self.pr_branch_ref = self.project.gitlab_repo.branches.create(
