@@ -63,7 +63,8 @@ class Testcase:
                 self.pr.close()
                 self.pr_branch_ref.delete()
         except Exception as e:
-            logging.error(f"Validation test {self.pr.title} ({self.pr.url}) failed: {e}")
+            msg = f"Validation test {self.pr.title} ({self.pr.url}) failed: {e}"
+            logging.error(msg)
 
     def trigger_build(self):
         """
@@ -215,7 +216,8 @@ class Testcase:
                 )
             except Exception as e:
                 # project does not exist yet
-                logging.warning(f"Copr project doesn't exist yet: {e}")
+                msg = f"Copr project doesn't exist yet: {e}"
+                logging.warning(msg)
                 continue
 
             if len(new_builds) >= old_build_len + 1:
