@@ -20,11 +20,11 @@ repos:
         args:
           - --allow-missing-credentials
   - repo: https://github.com/psf/black
-    rev: 23.12.1
+    rev: 24.2.0
     hooks:
       - id: black
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.1.14
+    rev: v0.2.1
     hooks:
       - id: ruff
         args: [--fix, --exit-non-zero-on-fix]
@@ -47,7 +47,7 @@ repos:
     hooks:
       - id: shellcheck
   - repo: https://github.com/gitleaks/gitleaks
-    rev: v8.18.1
+    rev: v8.18.2
     hooks:
       - id: gitleaks
         # The hook runs 'gitleaks protect --staged' which parses output of
