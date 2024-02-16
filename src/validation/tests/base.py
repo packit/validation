@@ -2,6 +2,7 @@
 #
 # SPDX-License-Identifier: MIT
 
+import asyncio
 import logging
 
 from ogr.abstract import GitProject
@@ -14,39 +15,56 @@ class Tests:
     project: GitProject
     test_case_kls: type
 
-    def run(self):
+    async def run(self):
+        loop = asyncio.get_event_loop()
         prs_for_comment = [
             pr for pr in self.project.get_pr_list() if pr.title.startswith("Test VM Image builds")
         ]
         if prs_for_comment:
-            logging.info("Run testcases where the build is triggered by a ‹vm-image-build› comment")
-        else:
-            logging.warning(
-                "No testcases found where the build is triggered by a ‹vm-image-build› comment",
+            msg = (
+                "Run testcases where the build is triggered by a "
+                f"‹vm-image-build› comment for {self.project.service.instance_url}"
             )
+        else:
+            msg = (
+                "No testcases found where the build is triggered by a "
+                f"‹vm-image-build› comment for {self.project.service.instance_url}"
+            )
+        logging.warning(msg)
         for pr in prs_for_comment:
-            self.test_case_kls(
-                project=self.project,
-                pr=pr,
-                trigger=Trigger.comment,
-                deployment=DEPLOYMENT,
-                comment=DEPLOYMENT.pr_comment_vm_image_build,
-            ).run_test()
+            loop.create_task(
+                self.test_case_kls(
+                    project=self.project,
+                    pr=pr,
+                    trigger=Trigger.comment,
+                    deployment=DEPLOYMENT,
+                    comment=DEPLOYMENT.pr_comment_vm_image_build,
+                ).run_test(),
+            )
 
         prs_for_comment = [
             pr for pr in self.project.get_pr_list() if pr.title.startswith("Basic test case:")
         ]
         if prs_for_comment:
-            logging.info("Run testcases where the build is triggered by a ‹build› comment")
+            msg = (
+                "Run testcases where the build is triggered by a "
+                f"‹build› comment for {self.project.service.instance_url}"
+            )
         else:
-            logging.warning("No testcases found where the build is triggered by a ‹build› comment")
+            msg = (
+                "No testcases found where the build is triggered by a "
+                f"‹build› comment for {self.project.service.instance_url}"
+            )
+        logging.warning(msg)
         for pr in prs_for_comment:
-            self.test_case_kls(
-                project=self.project,
-                pr=pr,
-                trigger=Trigger.comment,
-                deployment=DEPLOYMENT,
-            ).run_test()
+            loop.create_task(
+                self.test_case_kls(
+                    project=self.project,
+                    pr=pr,
+                    trigger=Trigger.comment,
+                    deployment=DEPLOYMENT,
+                ).run_test(),
+            )
 
         pr_for_push = [
             pr
@@ -54,16 +72,29 @@ class Tests:
             if pr.title.startswith(DEPLOYMENT.push_trigger_tests_prefix)
         ]
         if pr_for_push:
-            logging.info("Run testcase where the build is triggered by push")
+            msg = (
+                "Run testcase where the build is triggered by push "
+                f"for {self.project.service.instance_url}"
+            )
         else:
-            logging.warning("No testcase found where the build is triggered by push")
+            msg = (
+                "No testcase found where the build is triggered by push "
+                f"for {self.project.service.instance_url}"
+            )
+        logging.warning(msg)
         if pr_for_push:
-            self.test_case_kls(
-                project=self.project,
-                pr=pr_for_push[0],
-                trigger=Trigger.push,
-                deployment=DEPLOYMENT,
-            ).run_test()
+            loop.create_task(
+                self.test_case_kls(
+                    project=self.project,
+                    pr=pr_for_push[0],
+                    trigger=Trigger.push,
+                    deployment=DEPLOYMENT,
+                ).run_test(),
+            )
 
-        logging.info("Run testcase where the build is triggered by opening a new PR")
-        self.test_case_kls(project=self.project, deployment=DEPLOYMENT).run_test()
+        msg = (
+            "Run testcase where the build is triggered by opening "
+            f"a new PR {self.project.service.instance_url}"
+        )
+        logging.info(msg)
+        loop.create_task(self.test_case_kls(project=self.project, deployment=DEPLOYMENT).run_test())
