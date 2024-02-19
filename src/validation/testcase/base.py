@@ -2,8 +2,9 @@
 #
 # SPDX-License-Identifier: MIT
 
+import asyncio
 import logging
-import time
+import traceback
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Union
 
@@ -18,6 +19,12 @@ from validation.utils.trigger import Trigger
 
 
 class Testcase:
+
+    CHECK_TIME_FOR_REACTION = 60 * 5
+    CHECK_TIME_FOR_SUBMIT_BUILDS = 60 * 45
+    CHECK_TIME_FOR_BUILD = 60 * 20
+    CHECK_TIME_FOR_WATCH_STATUSES = 60 * 30
+
     def __init__(
         self,
         project: GitProject,
@@ -35,6 +42,9 @@ class Testcase:
         self._copr_project_name = None
         self.deployment = deployment or PRODUCTION_INFO
         self.comment = comment
+        self.loop = asyncio.get_event_loop()
+        self._build = None
+        self._statuses: list[GithubCheckRun] | list[CommitFlag] = []
 
     @property
     def copr_project_name(self):
@@ -46,14 +56,14 @@ class Testcase:
             self._copr_project_name = self.construct_copr_project_name()
         return self._copr_project_name
 
-    def run_test(self):
+    async def run_test(self):
         """
         Run all checks, if there is any failure message, send it to Sentry and in case of
         opening PR close it.
         :return:
         """
         try:
-            self.run_checks()
+            await self.run_checks()
             if self.failure_msg:
                 message = f"{self.pr.title} ({self.pr.url}) failed: {self.failure_msg}"
 
@@ -65,6 +75,8 @@ class Testcase:
         except Exception as e:
             msg = f"Validation test {self.pr.title} ({self.pr.url}) failed: {e}"
             logging.error(msg)
+            tb = traceback.format_exc()
+            logging.error(tb)
 
     def trigger_build(self):
         """
@@ -118,21 +130,21 @@ class Testcase:
         )
         self.head_commit = self.pr.head_commit
 
-    def run_checks(self):
+    async def run_checks(self):
         """
         Run all checks of the test case.
         :return:
         """
-        build = self.check_build_submitted()
+        await self.check_build_submitted()
 
-        if not build:
+        if not self._build:
             return
 
-        self.check_build(build.id)
-        self.check_completed_statuses()
+        await self.check_build(self._build.id)
+        await self.check_completed_statuses()
         self.check_comment()
 
-    def check_pending_check_runs(self):
+    async def check_pending_check_runs(self):
         """
         Check whether some check run is set to queued
         (they are updated in loop, so it is enough).
@@ -140,8 +152,11 @@ class Testcase:
         """
         status_names = [self.get_status_name(status) for status in self.get_statuses()]
 
-        watch_end = datetime.now(tz=timezone.utc) + timedelta(seconds=60)
-        failure_message = "Github check runs were not set to queued in time 1 minute.\n"
+        watch_end = datetime.now(tz=timezone.utc) + timedelta(seconds=self.CHECK_TIME_FOR_REACTION)
+        failure_message = (
+            "Github check runs were not set to queued in time "
+            "({self.CHECK_TIME_FOR_REACTION} minutes).\n"
+        )
 
         # when a new PR is opened
         while len(status_names) == 0:
@@ -149,6 +164,7 @@ class Testcase:
                 self.failure_msg += failure_message
                 return
             status_names = [self.get_status_name(status) for status in self.get_statuses()]
+            await asyncio.sleep(30)
 
         logging.info(
             "Watching pending statuses for commit %s",
@@ -172,11 +188,11 @@ class Testcase:
                 if not self.is_status_completed(status):
                     return
 
-            time.sleep(5)
+            await asyncio.sleep(60)
 
-    def check_build_submitted(self):
+    async def check_build_submitted(self):
         """
-        Check whether the build was submitted in Copr in time 15 minutes.
+        Check whether the build was submitted in Copr in time.
         :return:
         """
         if self.pr:
@@ -195,9 +211,11 @@ class Testcase:
 
         self.trigger_build()
 
-        watch_end = datetime.now(tz=timezone.utc) + timedelta(seconds=60 * 15)
+        watch_end = datetime.now(tz=timezone.utc) + timedelta(
+            seconds=self.CHECK_TIME_FOR_SUBMIT_BUILDS,
+        )
 
-        self.check_pending_check_runs()
+        await self.check_pending_check_runs()
 
         logging.info(
             "Watching whether a build has been submitted for %s in %s",
@@ -206,8 +224,11 @@ class Testcase:
         )
         while True:
             if datetime.now(tz=timezone.utc) > watch_end:
-                self.failure_msg += "The build was not submitted in Copr in time 15 minutes.\n"
-                return None
+                self.failure_msg += (
+                    "The build was not submitted in Copr in time "
+                    "({self.CHECK_TIME_FOR_SUBMIT_BUILDS} minutes).\n"
+                )
+                return
 
             try:
                 new_builds = copr().build_proxy.get_list(
@@ -221,7 +242,8 @@ class Testcase:
                 continue
 
             if len(new_builds) >= old_build_len + 1:
-                return new_builds[0]
+                self._build = new_builds[0]
+                return
 
             new_comments = self.pr.get_comments(reverse=True)
             new_comments = new_comments[: (len(new_comments) - old_comment_len)]
@@ -235,26 +257,28 @@ class Testcase:
                         f"New github comment from p-s while submitting Copr build: {comment[0]}\n"
                     )
 
-            time.sleep(30)
+            await asyncio.sleep(120)
 
-    def check_build(self, build_id):
+    async def check_build(self, build_id):
         """
-        Check whether the build was successful in Copr in time 15 minutes.
+        Check whether the build was successful in Copr.
         :param build_id: ID of the build
         :return:
         """
-        watch_end = datetime.now(tz=timezone.utc) + timedelta(seconds=60 * 15)
+        watch_end = datetime.now(tz=timezone.utc) + timedelta(seconds=self.CHECK_TIME_FOR_BUILD)
         state_reported = ""
         logging.info("Watching Copr build %s", build_id)
 
         while True:
             if datetime.now(tz=timezone.utc) > watch_end:
-                self.failure_msg += "The build did not finish in time 15 minutes.\n"
+                self.failure_msg += (
+                    f"The build did not finish in time ({self.CHECK_TIME_FOR_BUILD} minutes).\n"
+                )
                 return
 
             build = copr().build_proxy.get(build_id)
             if build.state == state_reported:
-                time.sleep(20)
+                await asyncio.sleep(60)
                 continue
             state_reported = build.state
 
@@ -272,7 +296,7 @@ class Testcase:
                     )
                 return
 
-            time.sleep(30)
+            await asyncio.sleep(60)
 
     def check_comment(self):
         """
@@ -310,7 +334,7 @@ class Testcase:
             branch=branch,
         )
 
-    def check_completed_statuses(self):
+    async def check_completed_statuses(self):
         """
         Check whether all check runs are set to success.
         :return:
@@ -318,44 +342,45 @@ class Testcase:
         if "The build in Copr was not successful." in self.failure_msg:
             return
 
-        statuses = self.watch_statuses()
-        for status in statuses:
+        await self.watch_statuses()
+        for status in self._statuses:
             if not self.is_status_successful(status):
                 self.failure_msg += (
                     f"Check run {self.get_status_name(status)} was set to failure.\n"
                 )
 
-    def watch_statuses(self):
+    async def watch_statuses(self):
         """
-        Watch the check runs 20 minutes, if all the check runs have completed
+        Watch the check runs, if all the check runs have completed
         status, return the check runs.
         :return: list[CheckRun]
         """
-        watch_end = datetime.now(tz=timezone.utc) + timedelta(seconds=60 * 20)
+        watch_end = datetime.now(tz=timezone.utc) + timedelta(
+            seconds=self.CHECK_TIME_FOR_WATCH_STATUSES,
+        )
         logging.info(
             "Watching statuses for commit %s",
             self.head_commit,
         )
 
         while True:
-            statuses = self.get_statuses()
+            self._statuses = self.get_statuses()
 
-            if all(self.is_status_completed(status) for status in statuses):
+            if all(self.is_status_completed(status) for status in self._statuses):
                 break
 
             if datetime.now(tz=timezone.utc) > watch_end:
                 self.failure_msg += (
-                    "These check runs were not completed 20 minutes"
+                    "These check runs were not completed in "
+                    f"{self.CHECK_TIME_FOR_WATCH_STATUSES} minutes"
                     " after Copr build had been built:\n"
                 )
-                for status in statuses:
+                for status in self._statuses:
                     if not self.is_status_completed(status):
                         self.failure_msg += f"{self.get_status_name(status)}\n"
-                return []
+                return
 
-            time.sleep(20)
-
-        return statuses
+            await asyncio.sleep(60)
 
     @property
     def account_name(self):

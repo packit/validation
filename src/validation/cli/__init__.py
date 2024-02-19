@@ -2,6 +2,7 @@
 #
 # SPDX-License-Identifier: MIT
 
+import asyncio
 import logging
 from os import getenv
 
@@ -16,10 +17,11 @@ logging.basicConfig(level=logging.INFO)
 @click.group(context_settings={"help_option_names": ["-h", "--help"]}, invoke_without_command=True)
 @click.version_option(prog_name="validation")
 def validation():
+    loop = asyncio.get_event_loop()
     # GitHub
     if getenv("GITHUB_TOKEN"):
         logging.info("Running validation for GitHub.")
-        GithubTests().run()
+        loop.create_task(GithubTests().run())
     else:
         logging.info("GITHUB_TOKEN not set, skipping the validation for GitHub.")
 
@@ -44,8 +46,12 @@ def validation():
             continue
 
         logging.info("Running validation for GitLab instance: %s", instance_url)
-        GitlabTests(
-            instance_url=instance_url,
-            namespace=namespace,
-            token_name=token,
-        ).run()
+        loop.create_task(
+            GitlabTests(
+                instance_url=instance_url,
+                namespace=namespace,
+                token_name=token,
+            ).run(),
+        )
+
+    loop.run_forever()
