@@ -1,4 +1,5 @@
-# Copyright Contributors to the Packit project.
+# SPDX-FileCopyrightText: 2023-present Contributors to the Packit Project.
+#
 # SPDX-License-Identifier: MIT
 
 import logging
