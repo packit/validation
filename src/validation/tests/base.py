@@ -17,6 +17,8 @@ class Tests:
 
     async def run(self):
         loop = asyncio.get_event_loop()
+        tasks = set()
+
         prs_for_comment = [
             pr for pr in self.project.get_pr_list() if pr.title.startswith("Test VM Image builds")
         ]
@@ -32,7 +34,7 @@ class Tests:
             )
         logging.warning(msg)
         for pr in prs_for_comment:
-            loop.create_task(
+            task = loop.create_task(
                 self.test_case_kls(
                     project=self.project,
                     pr=pr,
@@ -41,6 +43,9 @@ class Tests:
                     comment=DEPLOYMENT.pr_comment_vm_image_build,
                 ).run_test(),
             )
+
+            tasks.add(task)
+            task.add_done_callback(tasks.discard)
 
         prs_for_comment = [
             pr for pr in self.project.get_pr_list() if pr.title.startswith("Basic test case:")
@@ -57,7 +62,7 @@ class Tests:
             )
         logging.warning(msg)
         for pr in prs_for_comment:
-            loop.create_task(
+            task = loop.create_task(
                 self.test_case_kls(
                     project=self.project,
                     pr=pr,
@@ -65,6 +70,9 @@ class Tests:
                     deployment=DEPLOYMENT,
                 ).run_test(),
             )
+
+            tasks.add(task)
+            task.add_done_callback(tasks.discard)
 
         pr_for_push = [
             pr
@@ -83,7 +91,7 @@ class Tests:
             )
         logging.warning(msg)
         if pr_for_push:
-            loop.create_task(
+            task = loop.create_task(
                 self.test_case_kls(
                     project=self.project,
                     pr=pr_for_push[0],
@@ -92,9 +100,17 @@ class Tests:
                 ).run_test(),
             )
 
+            tasks.add(task)
+            task.add_done_callback(tasks.discard)
+
         msg = (
             "Run testcase where the build is triggered by opening "
             f"a new PR {self.project.service.instance_url}"
         )
         logging.info(msg)
-        loop.create_task(self.test_case_kls(project=self.project, deployment=DEPLOYMENT).run_test())
+
+        task = loop.create_task(
+            self.test_case_kls(project=self.project, deployment=DEPLOYMENT).run_test(),
+        )
+        tasks.add(task)
+        task.add_done_callback(tasks.discard)
