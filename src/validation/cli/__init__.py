@@ -18,10 +18,15 @@ logging.basicConfig(level=logging.INFO)
 @click.version_option(prog_name="validation")
 def validation():
     loop = asyncio.get_event_loop()
+    tasks = set()
+
     # GitHub
     if getenv("GITHUB_TOKEN"):
         logging.info("Running validation for GitHub.")
-        loop.create_task(GithubTests().run())
+        task = loop.create_task(GithubTests().run())
+
+        tasks.add(task)
+        task.add_done_callback(tasks.discard)
     else:
         logging.info("GITHUB_TOKEN not set, skipping the validation for GitHub.")
 
@@ -46,12 +51,15 @@ def validation():
             continue
 
         logging.info("Running validation for GitLab instance: %s", instance_url)
-        loop.create_task(
+        task = loop.create_task(
             GitlabTests(
                 instance_url=instance_url,
                 namespace=namespace,
                 token_name=token,
             ).run(),
         )
+
+        tasks.add(task)
+        task.add_done_callback(tasks.discard)
 
     loop.run_forever()
