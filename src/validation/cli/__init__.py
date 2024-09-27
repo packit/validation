@@ -32,7 +32,7 @@ def validation():
 
     # GitLab
     gitlab_instances = [
-        ("https://gitlab.com", "packit-service", "GITLAB_TOKEN"),
+        ("https://gitlab.com", "packit", "GITLAB_TOKEN"),
         ("https://gitlab.gnome.org", "packit-validation", "GITLAB_GNOME_TOKEN"),
         (
             "https://gitlab.freedesktop.org",

@@ -17,7 +17,7 @@ class GitlabTests(Tests):
     def __init__(
         self,
         instance_url="https://gitlab.com",
-        namespace="packit-service",
+        namespace="packit",
         token_name="GITLAB_TOKEN",
     ):
         gitlab_service = GitlabService(token=getenv(token_name), instance_url=instance_url)
