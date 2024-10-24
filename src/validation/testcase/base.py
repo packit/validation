@@ -19,7 +19,6 @@ from validation.utils.trigger import Trigger
 
 
 class Testcase:
-
     CHECK_TIME_FOR_REACTION = 60 * 5
     CHECK_TIME_FOR_SUBMIT_BUILDS = 60 * 45
     CHECK_TIME_FOR_BUILD = 60 * 20
