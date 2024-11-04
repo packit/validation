@@ -4,13 +4,13 @@
 
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.7.0
+    rev: v0.7.2
     hooks:
       - id: ruff
         args: [--fix, --exit-non-zero-on-fix]
       - id: ruff-format
   - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.10.1
+    rev: v1.13.0
     hooks:
       - id: mypy
         args: [--no-strict-optional, --ignore-missing-imports]
@@ -32,7 +32,7 @@ repos:
     hooks:
       - id: prettier
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v4.6.0
+    rev: v5.0.0
     hooks:
       - id: check-added-large-files
       - id: check-merge-conflict
@@ -44,14 +44,14 @@ repos:
         args:
           - --allow-missing-credentials
   - repo: https://github.com/gitleaks/gitleaks
-    rev: v8.18.4
+    rev: v8.21.2
     hooks:
       - id: gitleaks
         # The hook runs 'gitleaks protect --staged' which parses output of
         # 'git diff --staged', i.e. always passes in pre-push/manual stage.
-        stages: [commit]
+        stages: [pre-commit]
   - repo: https://github.com/python-jsonschema/check-jsonschema
-    rev: 0.28.6
+    rev: 0.29.4
     hooks:
       - id: check-github-workflows
         args: ["--verbose"]
