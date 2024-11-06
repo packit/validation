@@ -49,7 +49,9 @@ class Testcase:
     def copr_project_name(self):
         """
         Get the name of Copr project from id of the PR.
-        :return:
+
+        Returns:
+            Copr project name.
         """
         if self.pr and not self._copr_project_name:
             self._copr_project_name = self.construct_copr_project_name()
@@ -59,7 +61,6 @@ class Testcase:
         """
         Run all checks, if there is any failure message, send it to Sentry and in case of
         opening PR close it.
-        :return:
         """
         try:
             await self.run_checks()
@@ -80,7 +81,6 @@ class Testcase:
     def trigger_build(self):
         """
         Trigger the build (by commenting/pushing to the PR/opening a new PR).
-        :return:
         """
         logging.info(
             "Triggering a build for %s",
@@ -97,7 +97,6 @@ class Testcase:
     def push_to_pr(self):
         """
         Push a new commit to the PR.
-        :return:
         """
         branch = self.pr.source_branch
         commit_msg = f"Commit build trigger ({datetime.now(tz=timezone.utc).strftime('%d/%m/%y')})"
@@ -107,7 +106,6 @@ class Testcase:
         """
         Create a new PR, if the source branch 'test_case_opened_pr' does not exist,
         create one and commit some changes before it.
-        :return:
         """
         source_branch = f"test/{self.deployment.name}/opened_pr"
         pr_title = f"Basic test case ({self.deployment.name}): opened PR trigger"
@@ -132,7 +130,6 @@ class Testcase:
     async def run_checks(self):
         """
         Run all checks of the test case.
-        :return:
         """
         await self.check_build_submitted()
 
@@ -147,7 +144,6 @@ class Testcase:
         """
         Check whether some check run is set to queued
         (they are updated in loop, so it is enough).
-        :return:
         """
         status_names = [self.get_status_name(status) for status in self.get_statuses()]
 
@@ -192,7 +188,6 @@ class Testcase:
     async def check_build_submitted(self):
         """
         Check whether the build was submitted in Copr in time.
-        :return:
         """
         if self.pr:
             try:
@@ -261,8 +256,9 @@ class Testcase:
     async def check_build(self, build_id):
         """
         Check whether the build was successful in Copr.
-        :param build_id: ID of the build
-        :return:
+
+        Args:
+            build_id: ID of the Copr build
         """
         watch_end = datetime.now(tz=timezone.utc) + timedelta(seconds=self.CHECK_TIME_FOR_BUILD)
         state_reported = ""
@@ -300,7 +296,6 @@ class Testcase:
     def check_comment(self):
         """
         Check whether p-s has commented when the Copr build was not successful.
-        :return:
         """
         failure = "The build in Copr was not successful." in self.failure_msg
 
@@ -336,7 +331,6 @@ class Testcase:
     async def check_completed_statuses(self):
         """
         Check whether all check runs are set to success.
-        :return:
         """
         if "The build in Copr was not successful." in self.failure_msg:
             return
@@ -350,9 +344,8 @@ class Testcase:
 
     async def watch_statuses(self):
         """
-        Watch the check runs, if all the check runs have completed
-        status, return the check runs.
-        :return: list[CheckRun]
+        Watch the check runs, if all the check runs have completed status,
+        return.
         """
         watch_end = datetime.now(tz=timezone.utc) + timedelta(
             seconds=self.CHECK_TIME_FOR_WATCH_STATUSES,
