@@ -46,18 +46,6 @@ class Testcase(ABC):
         self._build = None
         self._statuses: list[GithubCheckRun] | list[CommitFlag] = []
 
-    @property
-    def copr_project_name(self):
-        """
-        Get the name of Copr project from id of the PR.
-
-        Returns:
-            Copr project name.
-        """
-        if self.pr and not self._copr_project_name:
-            self._copr_project_name = self.construct_copr_project_name()
-        return self._copr_project_name
-
     async def run_test(self):
         """
         Run all checks, if there is any failure message, send it to Sentry and in case of
@@ -379,7 +367,14 @@ class Testcase(ABC):
     @abstractmethod
     def account_name(self):
         """
-        Get the name of the (bot) account in GitHub/GitLab.
+        Name of the (bot) account in GitHub/GitLab.
+        """
+
+    @property
+    @abstractmethod
+    def copr_project_name(self):
+        """
+        Name of Copr project from id of the PR.
         """
 
     @abstractmethod
@@ -416,12 +411,6 @@ class Testcase(ABC):
     def update_file_and_commit(self, path: str, commit_msg: str, content: str, branch: str):
         """
         Update a file via API (creates new commit).
-        """
-
-    @abstractmethod
-    def construct_copr_project_name(self) -> str:
-        """
-        Construct the Copr project name for the PR to check.
         """
 
     @abstractmethod
