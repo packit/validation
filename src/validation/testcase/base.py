@@ -20,10 +20,10 @@ from validation.utils.trigger import Trigger
 
 
 class Testcase(ABC):
-    CHECK_TIME_FOR_REACTION = 60 * 5
-    CHECK_TIME_FOR_SUBMIT_BUILDS = 60 * 45
-    CHECK_TIME_FOR_BUILD = 60 * 20
-    CHECK_TIME_FOR_WATCH_STATUSES = 60 * 30
+    CHECK_TIME_FOR_REACTION = 5
+    CHECK_TIME_FOR_SUBMIT_BUILDS = 45
+    CHECK_TIME_FOR_BUILD = 20
+    CHECK_TIME_FOR_WATCH_STATUSES = 30
 
     def __init__(
         self,
@@ -136,7 +136,7 @@ class Testcase(ABC):
         """
         status_names = [self.get_status_name(status) for status in self.get_statuses()]
 
-        watch_end = datetime.now(tz=timezone.utc) + timedelta(seconds=self.CHECK_TIME_FOR_REACTION)
+        watch_end = datetime.now(tz=timezone.utc) + timedelta(minutes=self.CHECK_TIME_FOR_REACTION)
         failure_message = (
             "Github check runs were not set to queued in time "
             "({self.CHECK_TIME_FOR_REACTION} minutes).\n"
@@ -195,7 +195,7 @@ class Testcase(ABC):
         self.trigger_build()
 
         watch_end = datetime.now(tz=timezone.utc) + timedelta(
-            seconds=self.CHECK_TIME_FOR_SUBMIT_BUILDS,
+            minutes=self.CHECK_TIME_FOR_SUBMIT_BUILDS,
         )
 
         await self.check_pending_check_runs()
@@ -249,7 +249,7 @@ class Testcase(ABC):
         Args:
             build_id: ID of the Copr build
         """
-        watch_end = datetime.now(tz=timezone.utc) + timedelta(seconds=self.CHECK_TIME_FOR_BUILD)
+        watch_end = datetime.now(tz=timezone.utc) + timedelta(minutes=self.CHECK_TIME_FOR_BUILD)
         state_reported = ""
         logging.info("Watching Copr build %s", build_id)
 
@@ -337,7 +337,7 @@ class Testcase(ABC):
         return.
         """
         watch_end = datetime.now(tz=timezone.utc) + timedelta(
-            seconds=self.CHECK_TIME_FOR_WATCH_STATUSES,
+            minutes=self.CHECK_TIME_FOR_WATCH_STATUSES,
         )
         logging.info(
             "Watching statuses for commit %s",
