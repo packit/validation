@@ -139,7 +139,7 @@ class Testcase(ABC):
         watch_end = datetime.now(tz=timezone.utc) + timedelta(minutes=self.CHECK_TIME_FOR_REACTION)
         failure_message = (
             "Github check runs were not set to queued in time "
-            "({self.CHECK_TIME_FOR_REACTION} minutes).\n"
+            f"({self.CHECK_TIME_FOR_REACTION} minutes).\n"
         )
 
         # when a new PR is opened
@@ -209,7 +209,7 @@ class Testcase(ABC):
             if datetime.now(tz=timezone.utc) > watch_end:
                 self.failure_msg += (
                     "The build was not submitted in Copr in time "
-                    "({self.CHECK_TIME_FOR_SUBMIT_BUILDS} minutes).\n"
+                    f"({self.CHECK_TIME_FOR_SUBMIT_BUILDS} minutes).\n"
                 )
                 return
 
