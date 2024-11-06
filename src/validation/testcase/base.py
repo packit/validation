@@ -5,6 +5,7 @@
 import asyncio
 import logging
 import traceback
+from abc import ABC, abstractmethod
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Union
 
@@ -18,7 +19,7 @@ from validation.helpers import copr, log_failure
 from validation.utils.trigger import Trigger
 
 
-class Testcase:
+class Testcase(ABC):
     CHECK_TIME_FOR_REACTION = 60 * 5
     CHECK_TIME_FOR_SUBMIT_BUILDS = 60 * 45
     CHECK_TIME_FOR_BUILD = 60 * 20
@@ -375,52 +376,61 @@ class Testcase:
             await asyncio.sleep(60)
 
     @property
+    @abstractmethod
     def account_name(self):
         """
         Get the name of the (bot) account in GitHub/GitLab.
         """
-        return
 
+    @abstractmethod
     def get_statuses(self) -> Union[list[GithubCheckRun], list[CommitFlag]]:
         """
         Get the statuses (checks in GitHub).
         """
 
+    @abstractmethod
     def is_status_completed(self, status: Union[GithubCheckRun, CommitFlag]) -> bool:
         """
         Check whether the status is in completed state (e.g. success, failure).
         """
 
+    @abstractmethod
     def is_status_successful(self, status: Union[GithubCheckRun, CommitFlag]) -> bool:
         """
         Check whether the status is in successful state.
         """
 
+    @abstractmethod
     def delete_previous_branch(self, ref: str):
         """
         Delete the branch from the previous test run if it exists.
         """
 
+    @abstractmethod
     def create_file_in_new_branch(self, branch: str):
         """
         Create a new branch and a new file in it via API (creates new commit).
         """
 
+    @abstractmethod
     def update_file_and_commit(self, path: str, commit_msg: str, content: str, branch: str):
         """
         Update a file via API (creates new commit).
         """
 
+    @abstractmethod
     def construct_copr_project_name(self) -> str:
         """
         Construct the Copr project name for the PR to check.
         """
 
+    @abstractmethod
     def get_status_name(self, status: Union[GithubCheckRun, CommitFlag]) -> str:
         """
         Get the name of the status/check that is visible to user.
         """
 
+    @abstractmethod
     def create_empty_commit(self, branch: str, commit_msg: str) -> str:
         """
         Create an empty commit via API.
