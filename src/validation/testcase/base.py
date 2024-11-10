@@ -5,6 +5,7 @@
 import asyncio
 import logging
 import traceback
+from abc import ABC, abstractmethod
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Union
 
@@ -18,12 +19,11 @@ from validation.helpers import copr, log_failure
 from validation.utils.trigger import Trigger
 
 
-class Testcase:
-
-    CHECK_TIME_FOR_REACTION = 60 * 5
-    CHECK_TIME_FOR_SUBMIT_BUILDS = 60 * 45
-    CHECK_TIME_FOR_BUILD = 60 * 20
-    CHECK_TIME_FOR_WATCH_STATUSES = 60 * 30
+class Testcase(ABC):
+    CHECK_TIME_FOR_REACTION = 5
+    CHECK_TIME_FOR_SUBMIT_BUILDS = 45
+    CHECK_TIME_FOR_BUILD = 20
+    CHECK_TIME_FOR_WATCH_STATUSES = 30
 
     def __init__(
         self,
@@ -46,21 +46,10 @@ class Testcase:
         self._build = None
         self._statuses: list[GithubCheckRun] | list[CommitFlag] = []
 
-    @property
-    def copr_project_name(self):
-        """
-        Get the name of Copr project from id of the PR.
-        :return:
-        """
-        if self.pr and not self._copr_project_name:
-            self._copr_project_name = self.construct_copr_project_name()
-        return self._copr_project_name
-
     async def run_test(self):
         """
         Run all checks, if there is any failure message, send it to Sentry and in case of
         opening PR close it.
-        :return:
         """
         try:
             await self.run_checks()
@@ -81,7 +70,6 @@ class Testcase:
     def trigger_build(self):
         """
         Trigger the build (by commenting/pushing to the PR/opening a new PR).
-        :return:
         """
         logging.info(
             "Triggering a build for %s",
@@ -98,7 +86,6 @@ class Testcase:
     def push_to_pr(self):
         """
         Push a new commit to the PR.
-        :return:
         """
         branch = self.pr.source_branch
         commit_msg = f"Commit build trigger ({datetime.now(tz=timezone.utc).strftime('%d/%m/%y')})"
@@ -108,7 +95,6 @@ class Testcase:
         """
         Create a new PR, if the source branch 'test_case_opened_pr' does not exist,
         create one and commit some changes before it.
-        :return:
         """
         source_branch = f"test/{self.deployment.name}/opened_pr"
         pr_title = f"Basic test case ({self.deployment.name}): opened PR trigger"
@@ -133,7 +119,6 @@ class Testcase:
     async def run_checks(self):
         """
         Run all checks of the test case.
-        :return:
         """
         await self.check_build_submitted()
 
@@ -148,14 +133,13 @@ class Testcase:
         """
         Check whether some check run is set to queued
         (they are updated in loop, so it is enough).
-        :return:
         """
         status_names = [self.get_status_name(status) for status in self.get_statuses()]
 
-        watch_end = datetime.now(tz=timezone.utc) + timedelta(seconds=self.CHECK_TIME_FOR_REACTION)
+        watch_end = datetime.now(tz=timezone.utc) + timedelta(minutes=self.CHECK_TIME_FOR_REACTION)
         failure_message = (
             "Github check runs were not set to queued in time "
-            "({self.CHECK_TIME_FOR_REACTION} minutes).\n"
+            f"({self.CHECK_TIME_FOR_REACTION} minutes).\n"
         )
 
         # when a new PR is opened
@@ -193,7 +177,6 @@ class Testcase:
     async def check_build_submitted(self):
         """
         Check whether the build was submitted in Copr in time.
-        :return:
         """
         if self.pr:
             try:
@@ -212,7 +195,7 @@ class Testcase:
         self.trigger_build()
 
         watch_end = datetime.now(tz=timezone.utc) + timedelta(
-            seconds=self.CHECK_TIME_FOR_SUBMIT_BUILDS,
+            minutes=self.CHECK_TIME_FOR_SUBMIT_BUILDS,
         )
 
         await self.check_pending_check_runs()
@@ -226,7 +209,7 @@ class Testcase:
             if datetime.now(tz=timezone.utc) > watch_end:
                 self.failure_msg += (
                     "The build was not submitted in Copr in time "
-                    "({self.CHECK_TIME_FOR_SUBMIT_BUILDS} minutes).\n"
+                    f"({self.CHECK_TIME_FOR_SUBMIT_BUILDS} minutes).\n"
                 )
                 return
 
@@ -262,10 +245,11 @@ class Testcase:
     async def check_build(self, build_id):
         """
         Check whether the build was successful in Copr.
-        :param build_id: ID of the build
-        :return:
+
+        Args:
+            build_id: ID of the Copr build
         """
-        watch_end = datetime.now(tz=timezone.utc) + timedelta(seconds=self.CHECK_TIME_FOR_BUILD)
+        watch_end = datetime.now(tz=timezone.utc) + timedelta(minutes=self.CHECK_TIME_FOR_BUILD)
         state_reported = ""
         logging.info("Watching Copr build %s", build_id)
 
@@ -301,7 +285,6 @@ class Testcase:
     def check_comment(self):
         """
         Check whether p-s has commented when the Copr build was not successful.
-        :return:
         """
         failure = "The build in Copr was not successful." in self.failure_msg
 
@@ -337,7 +320,6 @@ class Testcase:
     async def check_completed_statuses(self):
         """
         Check whether all check runs are set to success.
-        :return:
         """
         if "The build in Copr was not successful." in self.failure_msg:
             return
@@ -351,12 +333,11 @@ class Testcase:
 
     async def watch_statuses(self):
         """
-        Watch the check runs, if all the check runs have completed
-        status, return the check runs.
-        :return: list[CheckRun]
+        Watch the check runs, if all the check runs have completed status,
+        return.
         """
         watch_end = datetime.now(tz=timezone.utc) + timedelta(
-            seconds=self.CHECK_TIME_FOR_WATCH_STATUSES,
+            minutes=self.CHECK_TIME_FOR_WATCH_STATUSES,
         )
         logging.info(
             "Watching statuses for commit %s",
@@ -383,52 +364,62 @@ class Testcase:
             await asyncio.sleep(60)
 
     @property
+    @abstractmethod
     def account_name(self):
         """
-        Get the name of the (bot) account in GitHub/GitLab.
+        Name of the (bot) account in GitHub/GitLab.
         """
-        return
 
+    @property
+    @abstractmethod
+    def copr_project_name(self):
+        """
+        Name of Copr project from id of the PR.
+        """
+
+    @abstractmethod
     def get_statuses(self) -> Union[list[GithubCheckRun], list[CommitFlag]]:
         """
         Get the statuses (checks in GitHub).
         """
 
+    @abstractmethod
     def is_status_completed(self, status: Union[GithubCheckRun, CommitFlag]) -> bool:
         """
         Check whether the status is in completed state (e.g. success, failure).
         """
 
+    @abstractmethod
     def is_status_successful(self, status: Union[GithubCheckRun, CommitFlag]) -> bool:
         """
         Check whether the status is in successful state.
         """
 
+    @abstractmethod
     def delete_previous_branch(self, ref: str):
         """
         Delete the branch from the previous test run if it exists.
         """
 
+    @abstractmethod
     def create_file_in_new_branch(self, branch: str):
         """
         Create a new branch and a new file in it via API (creates new commit).
         """
 
+    @abstractmethod
     def update_file_and_commit(self, path: str, commit_msg: str, content: str, branch: str):
         """
         Update a file via API (creates new commit).
         """
 
-    def construct_copr_project_name(self) -> str:
-        """
-        Construct the Copr project name for the PR to check.
-        """
-
+    @abstractmethod
     def get_status_name(self, status: Union[GithubCheckRun, CommitFlag]) -> str:
         """
         Get the name of the status/check that is visible to user.
         """
 
+    @abstractmethod
     def create_empty_commit(self, branch: str, commit_msg: str) -> str:
         """
         Create an empty commit via API.

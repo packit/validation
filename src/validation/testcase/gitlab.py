@@ -2,6 +2,8 @@
 #
 # SPDX-License-Identifier: MIT
 
+from functools import cached_property
+
 from gitlab import GitlabGetError
 from ogr.abstract import CommitFlag, CommitStatus
 from ogr.services.gitlab import GitlabProject
@@ -16,11 +18,12 @@ class GitlabTestcase(Testcase):
     def account_name(self):
         return self.deployment.gitlab_account_name
 
+    @cached_property
+    def copr_project_name(self) -> str:
+        return f"{self.project.service.hostname}-{self.project.namespace}-hello-world-{self.pr.id}"
+
     def get_status_name(self, status: CommitFlag) -> str:
         return status.context
-
-    def construct_copr_project_name(self) -> str:
-        return f"{self.project.service.hostname}-{self.project.namespace}-hello-world-{self.pr.id}"
 
     def create_file_in_new_branch(self, branch: str):
         self.pr_branch_ref = self.project.gitlab_repo.branches.create(

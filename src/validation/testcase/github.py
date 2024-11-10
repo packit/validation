@@ -2,6 +2,8 @@
 #
 # SPDX-License-Identifier: MIT
 
+from functools import cached_property
+
 from github import InputGitAuthor
 from github.Commit import Commit
 from ogr.services.github import GithubProject
@@ -22,11 +24,12 @@ class GithubTestcase(Testcase):
     def account_name(self):
         return self.deployment.github_bot_name
 
+    @cached_property
+    def copr_project_name(self) -> str:
+        return f"packit-hello-world-{self.pr.id}"
+
     def get_status_name(self, status: GithubCheckRun) -> str:
         return status.name
-
-    def construct_copr_project_name(self) -> str:
-        return f"packit-hello-world-{self.pr.id}"
 
     def create_empty_commit(self, branch: str, commit_msg: str) -> str:
         contents = self.project.github_repo.get_contents("test.txt", ref=branch)
