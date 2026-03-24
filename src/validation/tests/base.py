@@ -16,12 +16,14 @@ class Tests:
     test_case_kls: type
 
     async def run(self):
-        loop = asyncio.get_event_loop()
-        tasks = set()
+        logging.info("Starting validation tests for %s", self.project.service.instance_url)
+        logging.debug("Fetching PR list from %s/%s", self.project.namespace, self.project.repo)
+        tasks = []
 
         prs_for_comment = [
             pr for pr in self.project.get_pr_list() if pr.title.startswith("Test VM Image builds")
         ]
+        logging.debug("Found %d VM image build PRs", len(prs_for_comment))
         if prs_for_comment:
             msg = (
                 "Run testcases where the build is triggered by a "
@@ -33,23 +35,23 @@ class Tests:
                 f"‹vm-image-build› comment for {self.project.service.instance_url}"
             )
         logging.warning(msg)
-        for pr in prs_for_comment:
-            task = loop.create_task(
+        tasks.extend(
+            [
                 self.test_case_kls(
                     project=self.project,
                     pr=pr,
                     trigger=Trigger.comment,
                     deployment=DEPLOYMENT,
                     comment=DEPLOYMENT.pr_comment_vm_image_build,
-                ).run_test(),
-            )
-
-            tasks.add(task)
-            task.add_done_callback(tasks.discard)
+                ).run_test()
+                for pr in prs_for_comment
+            ],
+        )
 
         prs_for_comment = [
             pr for pr in self.project.get_pr_list() if pr.title.startswith("Basic test case:")
         ]
+        logging.debug("Found %d basic test case PRs", len(prs_for_comment))
         if prs_for_comment:
             msg = (
                 "Run testcases where the build is triggered by a "
@@ -61,24 +63,24 @@ class Tests:
                 f"‹build› comment for {self.project.service.instance_url}"
             )
         logging.warning(msg)
-        for pr in prs_for_comment:
-            task = loop.create_task(
+        tasks.extend(
+            [
                 self.test_case_kls(
                     project=self.project,
                     pr=pr,
                     trigger=Trigger.comment,
                     deployment=DEPLOYMENT,
-                ).run_test(),
-            )
-
-            tasks.add(task)
-            task.add_done_callback(tasks.discard)
+                ).run_test()
+                for pr in prs_for_comment
+            ],
+        )
 
         pr_for_push = [
             pr
             for pr in self.project.get_pr_list()
             if pr.title.startswith(DEPLOYMENT.push_trigger_tests_prefix)
         ]
+        logging.debug("Found %d push trigger PRs", len(pr_for_push))
         if pr_for_push:
             msg = (
                 "Run testcase where the build is triggered by push "
@@ -91,7 +93,7 @@ class Tests:
             )
         logging.warning(msg)
         if pr_for_push:
-            task = loop.create_task(
+            tasks.append(
                 self.test_case_kls(
                     project=self.project,
                     pr=pr_for_push[0],
@@ -100,17 +102,27 @@ class Tests:
                 ).run_test(),
             )
 
-            tasks.add(task)
-            task.add_done_callback(tasks.discard)
-
         msg = (
             "Run testcase where the build is triggered by opening "
             f"a new PR {self.project.service.instance_url}"
         )
         logging.info(msg)
+        try:
+            tasks.append(self.test_case_kls(project=self.project, deployment=DEPLOYMENT).run_test())
+            logging.info(
+                "Created %d test tasks for %s",
+                len(tasks),
+                self.project.service.instance_url,
+            )
+        except Exception as e:
+            logging.exception("Failed to create test task: %s", e)
+            raise
 
-        task = loop.create_task(
-            self.test_case_kls(project=self.project, deployment=DEPLOYMENT).run_test(),
-        )
-        tasks.add(task)
-        task.add_done_callback(tasks.discard)
+        # Wait for all tasks to complete
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        logging.info("All test tasks completed for %s", self.project.service.instance_url)
+
+        # Log any exceptions that occurred
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                logging.error("Task %d failed with exception: %s", i, result, exc_info=result)

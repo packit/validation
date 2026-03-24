@@ -24,6 +24,7 @@ class Testcase(ABC):
     CHECK_TIME_FOR_SUBMIT_BUILDS = 45
     CHECK_TIME_FOR_BUILD = 20
     CHECK_TIME_FOR_WATCH_STATUSES = 30
+    PACKIT_YAML_PATH = ".packit.yaml"
 
     def __init__(
         self,
@@ -42,30 +43,54 @@ class Testcase(ABC):
         self._copr_project_name = None
         self.deployment = deployment or PRODUCTION_INFO
         self.comment = comment
-        self.loop = asyncio.get_event_loop()
         self._build = None
         self._statuses: list[GithubCheckRun] | list[CommitFlag] = []
+
+    @property
+    def copr_project_name(self):
+        """
+        Get the name of Copr project from id of the PR.
+        :return:
+        """
+        if self.pr and not self._copr_project_name:
+            self._copr_project_name = self.construct_copr_project_name()
+        return self._copr_project_name
+
+    def _cleanup(self):
+        """
+        Hook for subclasses to perform cleanup after test completion.
+        Called in finally block to ensure cleanup happens even if test fails.
+        """
 
     async def run_test(self):
         """
         Run all checks, if there is any failure message, send it to Sentry and in case of
         opening PR close it.
         """
+        pr_id = f"PR#{self.pr.id}" if self.pr else "new PR"
+        logging.info("Starting test for %s (%s trigger)", pr_id, self.trigger.value)
         try:
             await self.run_checks()
             if self.failure_msg:
                 message = f"{self.pr.title} ({self.pr.url}) failed: {self.failure_msg}"
-
+                logging.error("Test failed: %s", message)
                 log_failure(message)
+            else:
+                logging.info("Test passed for %s", pr_id)
 
             if self.trigger == Trigger.pr_opened:
+                logging.debug("Closing PR and deleting branch for %s", pr_id)
                 self.pr.close()
-                self.pr_branch_ref.delete()
+                if self.pr_branch_ref:
+                    self.pr_branch_ref.delete()
         except Exception as e:
-            msg = f"Validation test {self.pr.title} ({self.pr.url}) failed: {e}"
+            pr_info = f"{self.pr.title} ({self.pr.url})" if self.pr else "new PR"
+            msg = f"Validation test {pr_info} failed: {e}"
             logging.error(msg)
             tb = traceback.format_exc()
             logging.error(tb)
+        finally:
+            self._cleanup()
 
     def trigger_build(self):
         """
@@ -98,16 +123,20 @@ class Testcase(ABC):
         """
         source_branch = f"test/{self.deployment.name}/opened_pr"
         pr_title = f"Basic test case ({self.deployment.name}): opened PR trigger"
+        logging.info("Creating new PR: %s from branch %s", pr_title, source_branch)
         self.delete_previous_branch(source_branch)
         # Delete the PR from the previous test run if it exists.
         existing_pr = [pr for pr in self.project.get_pr_list() if pr.title == pr_title]
         if len(existing_pr) == 1:
+            logging.debug("Closing existing PR: %s", existing_pr[0].url)
             existing_pr[0].close()
 
+        logging.debug("Creating file in new branch: %s", source_branch)
         self.create_file_in_new_branch(source_branch)
         if self.deployment.opened_pr_trigger__packit_yaml_fix:
             self.fix_packit_yaml(source_branch)
 
+        logging.debug("Creating PR...")
         self.pr = self.project.create_pr(
             title=pr_title,
             body="This test case is triggered automatically by our validation script.",
@@ -115,6 +144,7 @@ class Testcase(ABC):
             source_branch=source_branch,
         )
         self.head_commit = self.pr.head_commit
+        logging.info("PR created: %s", self.pr.url)
 
     async def run_checks(self):
         """
@@ -138,7 +168,7 @@ class Testcase(ABC):
 
         watch_end = datetime.now(tz=timezone.utc) + timedelta(minutes=self.CHECK_TIME_FOR_REACTION)
         failure_message = (
-            "Github check runs were not set to queued in time "
+            f"Commit statuses were not set to pending in time "
             f"({self.CHECK_TIME_FOR_REACTION} minutes).\n"
         )
 
@@ -195,7 +225,7 @@ class Testcase(ABC):
         self.trigger_build()
 
         watch_end = datetime.now(tz=timezone.utc) + timedelta(
-            minutes=self.CHECK_TIME_FOR_SUBMIT_BUILDS,
+            seconds=self.CHECK_TIME_FOR_SUBMIT_BUILDS,
         )
 
         await self.check_pending_check_runs()
@@ -209,7 +239,7 @@ class Testcase(ABC):
             if datetime.now(tz=timezone.utc) > watch_end:
                 self.failure_msg += (
                     "The build was not submitted in Copr in time "
-                    f"({self.CHECK_TIME_FOR_SUBMIT_BUILDS} minutes).\n"
+                    f"({self.CHECK_TIME_FOR_SUBMIT_BUILDS} seconds).\n"
                 )
                 return
 
@@ -221,7 +251,8 @@ class Testcase(ABC):
             except Exception as e:
                 # project does not exist yet
                 msg = f"Copr project doesn't exist yet: {e}"
-                logging.warning(msg)
+                logging.debug(msg)
+                await asyncio.sleep(30)
                 continue
 
             if len(new_builds) >= old_build_len + 1:
@@ -231,13 +262,14 @@ class Testcase(ABC):
             new_comments = self.pr.get_comments(reverse=True)
             new_comments = new_comments[: (len(new_comments) - old_comment_len)]
 
-            if len(new_comments) > 1:
-                comment = [
+            if new_comments:
+                packit_comments = [
                     comment.body for comment in new_comments if comment.author == self.account_name
                 ]
-                if len(comment) > 0:
+                if packit_comments:
+                    comment_text = packit_comments[0]
                     self.failure_msg += (
-                        f"New github comment from p-s while submitting Copr build: {comment[0]}\n"
+                        f"New comment from packit-service while submitting build: {comment_text}\n"
                     )
 
             await asyncio.sleep(120)
@@ -284,7 +316,7 @@ class Testcase(ABC):
 
     def check_comment(self):
         """
-        Check whether p-s has commented when the Copr build was not successful.
+        Check whether packit-service has commented when the Copr build was not successful.
         """
         failure = "The build in Copr was not successful." in self.failure_msg
 
@@ -296,22 +328,29 @@ class Testcase(ABC):
             ]
             if not packit_comments:
                 self.failure_msg += (
-                    "No comment from p-s about unsuccessful last copr build found.\n"
+                    "No comment from packit-service about unsuccessful last Copr build found.\n"
                 )
+
+    def _get_packit_yaml_ref(self, branch: str) -> str:
+        """
+        Get the git ref to read .packit.yaml from.
+        Can be overridden in subclasses (e.g., Pagure reads from default branch).
+        """
+        return branch
 
     def fix_packit_yaml(self, branch: str):
         """
         Update .packit.yaml file in the branch according to the deployment needs
         """
-        path = ".packit.yaml"
-        packit_yaml_content = self.project.get_file_content(path=path, ref=branch)
+        ref = self._get_packit_yaml_ref(branch)
+        packit_yaml_content = self.project.get_file_content(path=self.PACKIT_YAML_PATH, ref=ref)
         packit_yaml_content = packit_yaml_content.replace(
             self.deployment.opened_pr_trigger__packit_yaml_fix.from_str,
             self.deployment.opened_pr_trigger__packit_yaml_fix.to_str,
         )
 
         self.update_file_and_commit(
-            path=path,
+            path=self.PACKIT_YAML_PATH,
             commit_msg=self.deployment.opened_pr_trigger__packit_yaml_fix.git_msg,
             content=packit_yaml_content,
             branch=branch,
@@ -347,34 +386,44 @@ class Testcase(ABC):
         while True:
             self._statuses = self.get_statuses()
 
-            if all(self.is_status_completed(status) for status in self._statuses):
+            # Only consider checks complete if we have statuses AND they're all done
+            if self._statuses and all(
+                self.is_status_completed(status) for status in self._statuses
+            ):
                 break
 
             if datetime.now(tz=timezone.utc) > watch_end:
-                self.failure_msg += (
-                    "These check runs were not completed in "
-                    f"{self.CHECK_TIME_FOR_WATCH_STATUSES} minutes"
-                    " after Copr build had been built:\n"
-                )
-                for status in self._statuses:
-                    if not self.is_status_completed(status):
-                        self.failure_msg += f"{self.get_status_name(status)}\n"
+                if not self._statuses:
+                    minutes = self.CHECK_TIME_FOR_WATCH_STATUSES / 60
+                    self.failure_msg += (
+                        f"No commit statuses found after {minutes} minutes. "
+                        "packit-service may not have responded to the PR.\n"
+                    )
+                else:
+                    self.failure_msg += (
+                        "These commit statuses were not completed in "
+                        f"{self.CHECK_TIME_FOR_WATCH_STATUSES / 60} minutes"
+                        " after the build was submitted:\n"
+                    )
+                    for status in self._statuses:
+                        if not self.is_status_completed(status):
+                            self.failure_msg += f"{self.get_status_name(status)}\n"
                 return
 
             await asyncio.sleep(60)
 
     @property
     @abstractmethod
-    def account_name(self):
+    def account_name(self) -> str:
         """
-        Name of the (bot) account in GitHub/GitLab.
+        Get the name of the (bot) account in GitHub/GitLab/Pagure.
         """
 
-    @property
     @abstractmethod
-    def copr_project_name(self):
+    def construct_copr_project_name(self) -> str:
         """
-        Name of Copr project from id of the PR.
+        Construct the Copr project name from the PR.
+        Used by GitHub/GitLab. Pagure overrides to raise NotImplementedError.
         """
 
     @abstractmethod

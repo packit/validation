@@ -1,6 +1,6 @@
 FROM fedora:latest
 
-RUN dnf install -y python3-ogr python3-copr python3-pip && dnf clean all
+RUN dnf install -y python3-ogr python3-copr python3-koji python3-pip fedpkg krb5-workstation && dnf clean all
 
 RUN pip3 install --upgrade sentry-sdk && pip3 check
 
