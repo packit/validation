@@ -67,7 +67,7 @@ class PagureTestcase(Testcase):
     project: PagureProject
 
     # Pagure is slower than GitHub/GitLab, increase timeout for build submission
-    CHECK_TIME_FOR_SUBMIT_BUILDS = 120  # seconds (2 minutes)
+    CHECK_TIME_FOR_SUBMIT_BUILDS = 10  # minutes
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -329,6 +329,23 @@ class PagureTestcase(Testcase):
             CommitStatus.pending,
         ]
 
+    def is_status_recent(self, status: CommitFlag) -> bool:
+        """
+        Check if the status was created after the build was triggered.
+        Uses created timestamp with a 1-minute buffer for clock skew.
+        """
+        if not self._build_triggered_at:
+            return True  # No trigger time set, accept all statuses
+        if not status.created:
+            return True  # No timestamp on status, accept it
+
+        # Convert naive datetime to UTC-aware if needed
+        status_time = self._ensure_aware_datetime(status.created)
+
+        # Allow 1 minute buffer for clock skew
+        buffer_time = self._build_triggered_at - timedelta(minutes=1)
+        return status_time >= buffer_time
+
     def delete_previous_branch(self, branch: str):
         """Delete a branch from the fork."""
         try:
@@ -458,16 +475,17 @@ class PagureTestcase(Testcase):
         logging.info("Checking Koji build submission for Pagure PR")
         old_comment_len = len(list(self.pr.get_comments())) if self.pr else 0
 
+        self._build_triggered_at = datetime.now(tz=timezone.utc)
         self.trigger_build()
 
         watch_end = datetime.now(tz=timezone.utc) + timedelta(
-            seconds=self.CHECK_TIME_FOR_SUBMIT_BUILDS,
+            minutes=self.CHECK_TIME_FOR_SUBMIT_BUILDS,
         )
 
         await self.check_pending_check_runs()
 
         logging.info(
-            "Watching for Koji build task submission for %s (timeout: %d seconds)",
+            "Watching for Koji build task submission for %s (timeout: %d minutes)",
             self.pr,
             self.CHECK_TIME_FOR_SUBMIT_BUILDS,
         )
@@ -480,7 +498,7 @@ class PagureTestcase(Testcase):
             if datetime.now(tz=timezone.utc) > watch_end:
                 self.failure_msg += (
                     "The Koji build was not submitted in time "
-                    f"({self.CHECK_TIME_FOR_SUBMIT_BUILDS} seconds).\n"
+                    f"({self.CHECK_TIME_FOR_SUBMIT_BUILDS} minutes).\n"
                 )
                 return
 

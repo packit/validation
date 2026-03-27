@@ -2,6 +2,8 @@
 #
 # SPDX-License-Identifier: MIT
 
+from datetime import timedelta
+
 from github import InputGitAuthor
 from github.Commit import Commit
 from ogr.services.github import GithubProject
@@ -55,6 +57,23 @@ class GithubTestcase(Testcase):
 
     def is_status_completed(self, status: GithubCheckRun) -> bool:
         return status.status == GithubCheckRunStatus.completed
+
+    def is_status_recent(self, status: GithubCheckRun) -> bool:
+        """
+        Check if the status was created after the build was triggered.
+        Uses started_at timestamp with a 1-minute buffer for clock skew.
+        """
+        if not self._build_triggered_at:
+            return True  # No trigger time set, accept all statuses
+        if not status.started_at:
+            return True  # No timestamp on status, accept it
+
+        # Convert naive datetime to UTC-aware if needed
+        status_time = self._ensure_aware_datetime(status.started_at)
+
+        # Allow 1 minute buffer for clock skew
+        buffer_time = self._build_triggered_at - timedelta(minutes=1)
+        return status_time >= buffer_time
 
     def delete_previous_branch(self, branch: str):
         existing_branch = self.project.github_repo.get_git_matching_refs(f"heads/{branch}")

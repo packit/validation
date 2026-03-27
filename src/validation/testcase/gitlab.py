@@ -2,6 +2,8 @@
 #
 # SPDX-License-Identifier: MIT
 
+from datetime import timedelta
+
 from gitlab import GitlabGetError
 from ogr.abstract import CommitFlag, CommitStatus
 from ogr.services.gitlab import GitlabProject
@@ -54,6 +56,23 @@ class GitlabTestcase(Testcase):
             CommitStatus.pending,
         ]
 
+    def is_status_recent(self, status: CommitFlag) -> bool:
+        """
+        Check if the status was created after the build was triggered.
+        Uses created timestamp with a 1-minute buffer for clock skew.
+        """
+        if not self._build_triggered_at:
+            return True  # No trigger time set, accept all statuses
+        if not status.created:
+            return True  # No timestamp on status, accept it
+
+        # Convert naive datetime to UTC-aware if needed
+        status_time = self._ensure_aware_datetime(status.created)
+
+        # Allow 1 minute buffer for clock skew
+        buffer_time = self._build_triggered_at - timedelta(minutes=1)
+        return status_time >= buffer_time
+
     def delete_previous_branch(self, branch: str):
         try:
             existing_branch = self.project.gitlab_repo.branches.get(branch)
@@ -68,6 +87,11 @@ class GitlabTestcase(Testcase):
         file.save(branch=branch, commit_message=commit_msg)
 
     def create_empty_commit(self, branch: str, commit_msg: str) -> str:
-        data = {"branch": branch, "commit_message": commit_msg, "actions": []}
+        data = {
+            "branch": branch,
+            "commit_message": commit_msg,
+            "actions": [],
+            "allow_empty": True,
+        }
         commit = self.project.gitlab_repo.commits.create(data)
         return commit.id

@@ -13,6 +13,10 @@ from validation.tests.base import Tests
 
 class GitlabTests(Tests):
     test_case_kls = GitlabTestcase
+    # We need at least 50 requests per test, and we run multiple tests
+    # (new PR, push trigger, comment tests)
+    # GitLab has more generous limits than GitHub (2000/min vs 5000/hour)
+    min_required_rate_limit = 250
 
     def __init__(
         self,

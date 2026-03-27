@@ -14,71 +14,121 @@ from validation.utils.trigger import Trigger
 class Tests:
     project: GitProject
     test_case_kls: type
+    # Minimum required API rate limit - can be overridden in subclasses
+    min_required_rate_limit: int = 100
+    # Stagger delay in seconds between tests - can be overridden in subclasses
+    test_stagger_seconds: int = 0
+    # Threshold for displaying delay in minutes vs seconds
+    SECONDS_PER_MINUTE: int = 60
+
+    async def check_rate_limit(self) -> None:
+        """
+        Check API rate limit before running tests.
+        If quota is insufficient, wait proportionally and retry.
+        """
+        max_retries = 3
+        retry_count = 0
+
+        while retry_count < max_retries:
+            try:
+                # Use OGR's built-in rate limit checking
+                remaining = self.project.service.get_rate_limit_remaining()
+
+                if remaining is None:
+                    # Rate limit info not available (e.g., Pagure), skip the check
+                    logging.debug(
+                        "Rate limit information not available for %s, skipping check",
+                        self.project.service.instance_url,
+                    )
+                    return
+
+                logging.info(
+                    "API rate limit for %s: %d requests remaining",
+                    self.project.service.instance_url,
+                    remaining,
+                )
+
+                if remaining < self.min_required_rate_limit:
+                    # Calculate deficit and wait proportionally
+                    deficit = self.min_required_rate_limit - remaining
+                    # Wait time: roughly 1 second per missing request, with a minimum of 60s
+                    # and maximum of 3600s (1 hour)
+                    wait_seconds = max(60, min(deficit, 3600))
+
+                    retry_count += 1
+                    if retry_count >= max_retries:
+                        logging.warning(
+                            "Insufficient API quota for %s after %d retries: "
+                            "%d remaining (need %d). Proceeding anyway.",
+                            self.project.service.instance_url,
+                            max_retries,
+                            remaining,
+                            self.min_required_rate_limit,
+                        )
+                        return
+
+                    from datetime import datetime, timedelta, timezone
+
+                    resume_time = datetime.now(tz=timezone.utc) + timedelta(seconds=wait_seconds)
+                    logging.warning(
+                        "Insufficient API quota for %s: %d remaining (need %d). "
+                        "Waiting %d seconds until %s (retry %d/%d)",
+                        self.project.service.instance_url,
+                        remaining,
+                        self.min_required_rate_limit,
+                        wait_seconds,
+                        resume_time.strftime("%H:%M:%S UTC"),
+                        retry_count,
+                        max_retries,
+                    )
+                    await asyncio.sleep(wait_seconds)
+                    logging.info("Retrying rate limit check...")
+                    continue  # Retry the check
+
+                # Sufficient quota, proceed
+                return
+
+            except Exception as e:
+                # Log but don't fail on errors
+                logging.warning(
+                    "Could not check rate limit for %s: %s. Proceeding anyway.",
+                    self.project.service.instance_url,
+                    e,
+                )
+                return
 
     async def run(self):
+        # Check rate limit before starting tests
+        await self.check_rate_limit()
         logging.info("Starting validation tests for %s", self.project.service.instance_url)
         logging.debug("Fetching PR list from %s/%s", self.project.namespace, self.project.repo)
         tasks = []
 
-        prs_for_comment = [
-            pr for pr in self.project.get_pr_list() if pr.title.startswith("Test VM Image builds")
-        ]
-        logging.debug("Found %d VM image build PRs", len(prs_for_comment))
-        if prs_for_comment:
-            msg = (
-                "Run testcases where the build is triggered by a "
-                f"‹vm-image-build› comment for {self.project.service.instance_url}"
-            )
-        else:
-            msg = (
-                "No testcases found where the build is triggered by a "
-                f"‹vm-image-build› comment for {self.project.service.instance_url}"
-            )
-        logging.warning(msg)
-        tasks.extend(
-            [
+        # Fetch PR list once and cache it
+        all_prs = list(self.project.get_pr_list())
+
+        # Run non-comment tests first (these don't trigger abuse detection)
+        # 1. New PR test (creates PR via API, no comment)
+        msg = (
+            "Run testcase where the build is triggered by opening "
+            f"a new PR {self.project.service.instance_url}"
+        )
+        logging.info(msg)
+        try:
+            tasks.append(
                 self.test_case_kls(
                     project=self.project,
-                    pr=pr,
-                    trigger=Trigger.comment,
                     deployment=DEPLOYMENT,
-                    comment=DEPLOYMENT.pr_comment_vm_image_build,
-                ).run_test()
-                for pr in prs_for_comment
-            ],
-        )
-
-        prs_for_comment = [
-            pr for pr in self.project.get_pr_list() if pr.title.startswith("Basic test case:")
-        ]
-        logging.debug("Found %d basic test case PRs", len(prs_for_comment))
-        if prs_for_comment:
-            msg = (
-                "Run testcases where the build is triggered by a "
-                f"‹build› comment for {self.project.service.instance_url}"
+                    existing_prs=all_prs,
+                ).run_test(),
             )
-        else:
-            msg = (
-                "No testcases found where the build is triggered by a "
-                f"‹build› comment for {self.project.service.instance_url}"
-            )
-        logging.warning(msg)
-        tasks.extend(
-            [
-                self.test_case_kls(
-                    project=self.project,
-                    pr=pr,
-                    trigger=Trigger.comment,
-                    deployment=DEPLOYMENT,
-                ).run_test()
-                for pr in prs_for_comment
-            ],
-        )
+        except Exception as e:
+            logging.exception("Failed to create test task: %s", e)
+            raise
 
+        # 2. Push trigger test (pushes to PR, no comment)
         pr_for_push = [
-            pr
-            for pr in self.project.get_pr_list()
-            if pr.title.startswith(DEPLOYMENT.push_trigger_tests_prefix)
+            pr for pr in all_prs if pr.title.startswith(DEPLOYMENT.push_trigger_tests_prefix)
         ]
         logging.debug("Found %d push trigger PRs", len(pr_for_push))
         if pr_for_push:
@@ -86,13 +136,7 @@ class Tests:
                 "Run testcase where the build is triggered by push "
                 f"for {self.project.service.instance_url}"
             )
-        else:
-            msg = (
-                "No testcase found where the build is triggered by push "
-                f"for {self.project.service.instance_url}"
-            )
-        logging.warning(msg)
-        if pr_for_push:
+            logging.warning(msg)
             tasks.append(
                 self.test_case_kls(
                     project=self.project,
@@ -101,26 +145,94 @@ class Tests:
                     deployment=DEPLOYMENT,
                 ).run_test(),
             )
+        else:
+            msg = (
+                "No testcase found where the build is triggered by push "
+                f"for {self.project.service.instance_url}"
+            )
+            logging.warning(msg)
 
-        msg = (
-            "Run testcase where the build is triggered by opening "
-            f"a new PR {self.project.service.instance_url}"
+        # 3. Comment-based tests
+        vm_image_prs = [pr for pr in all_prs if pr.title.startswith("Test VM Image builds")]
+        basic_prs = [pr for pr in all_prs if pr.title.startswith("Basic test case:")]
+
+        # Combine all comment-based test PRs
+        all_comment_prs = [(pr, DEPLOYMENT.pr_comment_vm_image_build) for pr in vm_image_prs] + [
+            (pr, None) for pr in basic_prs
+        ]
+
+        logging.debug(
+            "Found %d VM image build PRs and %d basic test case PRs",
+            len(vm_image_prs),
+            len(basic_prs),
         )
-        logging.info(msg)
-        try:
-            tasks.append(self.test_case_kls(project=self.project, deployment=DEPLOYMENT).run_test())
+
+        if all_comment_prs:
             logging.info(
-                "Created %d test tasks for %s",
-                len(tasks),
+                "Running %d comment-based tests for %s",
+                len(all_comment_prs),
                 self.project.service.instance_url,
             )
-        except Exception as e:
-            logging.exception("Failed to create test task: %s", e)
-            raise
+
+            tasks.extend(
+                [
+                    self.test_case_kls(
+                        project=self.project,
+                        pr=pr,
+                        trigger=Trigger.comment,
+                        deployment=DEPLOYMENT,
+                        comment=comment,
+                    ).run_test()
+                    for pr, comment in all_comment_prs
+                ],
+            )
+        else:
+            logging.warning(
+                "No comment-based test PRs found for %s",
+                self.project.service.instance_url,
+            )
+
+        logging.info(
+            "Created %d test tasks for %s",
+            len(tasks),
+            self.project.service.instance_url,
+        )
+
+        # Run tests with staggered starts to avoid API rate limiting
+        # Stagger delay is configurable per service (test_stagger_seconds)
+        async def run_with_delay(task, delay):
+            if delay > 0:
+                if delay >= self.SECONDS_PER_MINUTE:
+                    minutes = delay // self.SECONDS_PER_MINUTE
+                    logging.info("Waiting %d minutes before starting next test...", minutes)
+                else:
+                    logging.info("Waiting %d seconds before starting next test...", delay)
+            await asyncio.sleep(delay)
+            return await task
+
+        staggered_tasks = [
+            run_with_delay(task, i * self.test_stagger_seconds) for i, task in enumerate(tasks)
+        ]
 
         # Wait for all tasks to complete
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        logging.info("All test tasks completed for %s", self.project.service.instance_url)
+        results = await asyncio.gather(*staggered_tasks, return_exceptions=True)
+
+        # Count successful and failed tests
+        passed = sum(1 for r in results if r is True)
+        failed = sum(1 for r in results if r is False or isinstance(r, Exception))
+        total = len(results)
+
+        # Log summary
+        separator = "=" * 60
+        logging.info(
+            "%s\nTest Summary for %s:\n  Total:  %d\n  Passed: %d\n  Failed: %d\n%s",
+            separator,
+            self.project.service.instance_url,
+            total,
+            passed,
+            failed,
+            separator,
+        )
 
         # Log any exceptions that occurred
         for i, result in enumerate(results):

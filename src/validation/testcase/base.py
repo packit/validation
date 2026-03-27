@@ -12,6 +12,7 @@ from typing import Optional, Union
 from github.GitRef import GitRef
 from gitlab.v4.objects import ProjectBranch
 from ogr.abstract import CommitFlag, GitProject, PullRequest
+from ogr.exceptions import GithubAPIException
 from ogr.services.github.check_run import GithubCheckRun
 
 from validation.deployment import PRODUCTION_INFO, DeploymentInfo
@@ -20,11 +21,13 @@ from validation.utils.trigger import Trigger
 
 
 class Testcase(ABC):
-    CHECK_TIME_FOR_REACTION = 5
-    CHECK_TIME_FOR_SUBMIT_BUILDS = 45
-    CHECK_TIME_FOR_BUILD = 20
-    CHECK_TIME_FOR_WATCH_STATUSES = 30
+    CHECK_TIME_FOR_REACTION = 2  # minutes - time to wait for commit statuses to be set to pending
+    CHECK_TIME_FOR_SUBMIT_BUILDS = 5  # minutes - time to wait for build to be submitted in Copr
+    CHECK_TIME_FOR_BUILD = 60  # minutes - time to wait for build to complete
+    CHECK_TIME_FOR_WATCH_STATUSES = 60  # minutes - time to watch for commit statuses
     PACKIT_YAML_PATH = ".packit.yaml"
+    MAX_COMMENTS_TO_CHECK = 5  # Limit comment fetching to avoid excessive API calls
+    HTTP_FORBIDDEN = 403  # HTTP status code for forbidden/access denied
 
     def __init__(
         self,
@@ -33,6 +36,7 @@ class Testcase(ABC):
         trigger: Trigger = Trigger.pr_opened,
         deployment: DeploymentInfo | None = None,
         comment: str | None = None,
+        existing_prs: list | None = None,
     ):
         self.project = project
         self.pr = pr
@@ -44,7 +48,9 @@ class Testcase(ABC):
         self.deployment = deployment or PRODUCTION_INFO
         self.comment = comment
         self._build = None
-        self._statuses: list[GithubCheckRun] | list[CommitFlag] = []
+        self._statuses: list[GithubCheckRun | CommitFlag] = []
+        self._build_triggered_at: datetime | None = None
+        self._existing_prs = existing_prs  # Cache to avoid re-fetching in create_pr()
 
     @property
     def copr_project_name(self):
@@ -62,21 +68,66 @@ class Testcase(ABC):
         Called in finally block to ensure cleanup happens even if test fails.
         """
 
-    async def run_test(self):
+    @staticmethod
+    def _ensure_aware_datetime(dt: datetime) -> datetime:
+        """
+        Convert a naive datetime to UTC-aware datetime.
+        If already timezone-aware, return as-is.
+
+        Args:
+            dt: A datetime object (naive or aware)
+
+        Returns:
+            Timezone-aware datetime (assumes UTC for naive datetimes)
+        """
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=timezone.utc)
+        return dt
+
+    def _check_for_error_comment(self) -> str | None:
+        """
+        Check for new error comments from packit-service.
+        Uses generator to avoid fetching all comment pages.
+
+        Returns:
+            The comment body if a new error comment is found, None otherwise
+        """
+        if not self.pr:
+            return None
+
+        # Get comments in reverse order (newest first)
+        # Generator is lazy - stops fetching pages once we find what we need
+        for i, comment in enumerate(self.pr.get_comments(reverse=True)):
+            if comment.author == self.account_name:
+                # Found a comment from packit-service
+                return comment.body
+            # Only check first MAX_COMMENTS_TO_CHECK comments to avoid excessive API calls
+            if i >= self.MAX_COMMENTS_TO_CHECK - 1:
+                break
+
+        return None
+
+    async def run_test(self) -> bool:
         """
         Run all checks, if there is any failure message, send it to Sentry and in case of
         opening PR close it.
+
+        Returns:
+            bool: True if test passed, False if test failed
         """
         pr_id = f"PR#{self.pr.id}" if self.pr else "new PR"
         logging.info("Starting test for %s (%s trigger)", pr_id, self.trigger.value)
+        test_passed = False
         try:
             await self.run_checks()
             if self.failure_msg:
                 message = f"{self.pr.title} ({self.pr.url}) failed: {self.failure_msg}"
                 logging.error("Test failed: %s", message)
                 log_failure(message)
+                test_passed = False
             else:
                 logging.info("Test passed for %s", pr_id)
+                test_passed = True
 
             if self.trigger == Trigger.pr_opened:
                 logging.debug("Closing PR and deleting branch for %s", pr_id)
@@ -89,8 +140,11 @@ class Testcase(ABC):
             logging.error(msg)
             tb = traceback.format_exc()
             logging.error(tb)
+            test_passed = False
         finally:
             self._cleanup()
+
+        return test_passed
 
     def trigger_build(self):
         """
@@ -101,8 +155,29 @@ class Testcase(ABC):
             self.pr if self.pr else "new PR",
         )
         if self.trigger == Trigger.comment:
+            if not self.pr:
+                msg = "Cannot post comment: PR is not set"
+                raise ValueError(msg)
+
             comment = self.comment or self.deployment.pr_comment
-            self.pr.comment(comment)
+            try:
+                self.pr.comment(comment)
+            except GithubAPIException as e:
+                if e.response_code == self.HTTP_FORBIDDEN:
+                    error_msg = (
+                        f"Failed to post comment to PR {self.pr.url} (HTTP 403 Forbidden).\n"
+                        "This typically means:\n"
+                        "  1. The PR has reached GitHub's 2,500 comment limit and "
+                        "commenting is disabled, OR\n"
+                        "  2. The PR has been closed/locked by GitHub.\n"
+                        f"Please check the PR at {self.pr.url} and verify its status.\n"
+                        "If the PR has hit the comment limit, close it and create a "
+                        "fresh test PR.\n"
+                    )
+                    logging.error(error_msg)
+                    raise RuntimeError(error_msg) from e
+                # Re-raise if it's a different error
+                raise
         elif self.trigger == Trigger.push:
             self.push_to_pr()
         else:
@@ -125,8 +200,17 @@ class Testcase(ABC):
         pr_title = f"Basic test case ({self.deployment.name}): opened PR trigger"
         logging.info("Creating new PR: %s from branch %s", pr_title, source_branch)
         self.delete_previous_branch(source_branch)
+
         # Delete the PR from the previous test run if it exists.
-        existing_pr = [pr for pr in self.project.get_pr_list() if pr.title == pr_title]
+        # Use cached PR list from constructor to avoid re-fetching
+        if self._existing_prs is None:
+            logging.debug("Fetching PR list to check for existing PR...")
+            existing_prs = list(self.project.get_pr_list())
+        else:
+            logging.debug("Using cached PR list to check for existing PR")
+            existing_prs = self._existing_prs
+
+        existing_pr = [pr for pr in existing_prs if pr.title == pr_title]
         if len(existing_pr) == 1:
             logging.debug("Closing existing PR: %s", existing_pr[0].url)
             existing_pr[0].close()
@@ -177,13 +261,17 @@ class Testcase(ABC):
             if datetime.now(tz=timezone.utc) > watch_end:
                 self.failure_msg += failure_message
                 return
-            status_names = [self.get_status_name(status) for status in self.get_statuses()]
             await asyncio.sleep(30)
+            status_names = [self.get_status_name(status) for status in self.get_statuses()]
 
         logging.info(
             "Watching pending statuses for commit %s",
             self.head_commit,
         )
+
+        # Small delay before entering polling loop to avoid rapid API calls
+        await asyncio.sleep(5)
+
         while True:
             if datetime.now(tz=timezone.utc) > watch_end:
                 self.failure_msg += failure_message
@@ -208,7 +296,10 @@ class Testcase(ABC):
         """
         Check whether the build was submitted in Copr in time.
         """
-        if self.pr:
+        # Only check for existing builds if PR already exists
+        # For new PR test, there can't be any existing builds
+        old_build_len = 0
+        if self.pr and self.trigger != Trigger.pr_opened:
             try:
                 old_build_len = len(
                     copr().build_proxy.get_list(self.deployment.copr_user, self.copr_project_name),
@@ -216,16 +307,20 @@ class Testcase(ABC):
             except Exception:
                 old_build_len = 0
 
-            old_comment_len = len(self.pr.get_comments())
-        else:
-            # the PR is not created yet
-            old_build_len = 0
-            old_comment_len = 0
-
+        self._build_triggered_at = datetime.now(tz=timezone.utc)
         self.trigger_build()
 
+        # For new PR, wait longer to give packit-service time to receive webhook
+        # and set up initial statuses before we start polling
+        if self.trigger == Trigger.pr_opened:
+            logging.debug("Waiting 30s for packit-service to receive webhook...")
+            await asyncio.sleep(30)
+        else:
+            # For comment/push triggers, shorter wait is fine
+            await asyncio.sleep(5)
+
         watch_end = datetime.now(tz=timezone.utc) + timedelta(
-            seconds=self.CHECK_TIME_FOR_SUBMIT_BUILDS,
+            minutes=self.CHECK_TIME_FOR_SUBMIT_BUILDS,
         )
 
         await self.check_pending_check_runs()
@@ -239,7 +334,7 @@ class Testcase(ABC):
             if datetime.now(tz=timezone.utc) > watch_end:
                 self.failure_msg += (
                     "The build was not submitted in Copr in time "
-                    f"({self.CHECK_TIME_FOR_SUBMIT_BUILDS} seconds).\n"
+                    f"({self.CHECK_TIME_FOR_SUBMIT_BUILDS} minutes).\n"
                 )
                 return
 
@@ -259,17 +354,12 @@ class Testcase(ABC):
                 self._build = new_builds[0]
                 return
 
-            new_comments = self.pr.get_comments(reverse=True)
-            new_comments = new_comments[: (len(new_comments) - old_comment_len)]
-
-            if new_comments:
-                packit_comments = [
-                    comment.body for comment in new_comments if comment.author == self.account_name
-                ]
-                if packit_comments:
-                    comment_text = packit_comments[0]
+            # Check for new error comments from packit-service after build was triggered
+            if self.pr:
+                error_comment = self._check_for_error_comment()
+                if error_comment:
                     self.failure_msg += (
-                        f"New comment from packit-service while submitting build: {comment_text}\n"
+                        f"New comment from packit-service while submitting build: {error_comment}\n"
                     )
 
             await asyncio.sleep(120)
@@ -320,13 +410,18 @@ class Testcase(ABC):
         """
         failure = "The build in Copr was not successful." in self.failure_msg
 
-        if failure:
-            packit_comments = [
-                comment
-                for comment in self.pr.get_comments(reverse=True)
-                if comment.author == self.account_name
-            ]
-            if not packit_comments:
+        if failure and self.pr:
+            # Check recent comments (newest first) using generator
+            found_packit_comment = False
+            for i, comment in enumerate(self.pr.get_comments(reverse=True)):
+                if comment.author == self.account_name:
+                    found_packit_comment = True
+                    break
+                # Only check first MAX_COMMENTS_TO_CHECK comments
+                if i >= self.MAX_COMMENTS_TO_CHECK - 1:
+                    break
+
+            if not found_packit_comment:
                 self.failure_msg += (
                     "No comment from packit-service about unsuccessful last Copr build found.\n"
                 )
@@ -384,7 +479,17 @@ class Testcase(ABC):
         )
 
         while True:
-            self._statuses = self.get_statuses()
+            all_statuses = self.get_statuses()
+            # Filter to only recent statuses (created after build was triggered)
+            self._statuses = [status for status in all_statuses if self.is_status_recent(status)]
+
+            # Log if we filtered out any old statuses
+            filtered_count = len(all_statuses) - len(self._statuses)
+            if filtered_count > 0:
+                logging.debug(
+                    "Filtered out %d old status(es) from before build was triggered",
+                    filtered_count,
+                )
 
             # Only consider checks complete if we have statuses AND they're all done
             if self._statuses and all(
@@ -394,15 +499,15 @@ class Testcase(ABC):
 
             if datetime.now(tz=timezone.utc) > watch_end:
                 if not self._statuses:
-                    minutes = self.CHECK_TIME_FOR_WATCH_STATUSES / 60
                     self.failure_msg += (
-                        f"No commit statuses found after {minutes} minutes. "
+                        "No commit statuses found after "
+                        f"{self.CHECK_TIME_FOR_WATCH_STATUSES} minutes. "
                         "packit-service may not have responded to the PR.\n"
                     )
                 else:
                     self.failure_msg += (
                         "These commit statuses were not completed in "
-                        f"{self.CHECK_TIME_FOR_WATCH_STATUSES / 60} minutes"
+                        f"{self.CHECK_TIME_FOR_WATCH_STATUSES} minutes"
                         " after the build was submitted:\n"
                     )
                     for status in self._statuses:
@@ -442,6 +547,13 @@ class Testcase(ABC):
     def is_status_successful(self, status: Union[GithubCheckRun, CommitFlag]) -> bool:
         """
         Check whether the status is in successful state.
+        """
+
+    @abstractmethod
+    def is_status_recent(self, status: Union[GithubCheckRun, CommitFlag]) -> bool:
+        """
+        Check whether the status was created after the build was triggered.
+        This filters out old statuses from previous test runs.
         """
 
     @abstractmethod
