@@ -153,17 +153,13 @@ class Tests:
             logging.warning(msg)
 
         # 3. Comment-based tests
-        vm_image_prs = [pr for pr in all_prs if pr.title.startswith("Test VM Image builds")]
         basic_prs = [pr for pr in all_prs if pr.title.startswith("Basic test case:")]
 
         # Combine all comment-based test PRs
-        all_comment_prs = [(pr, DEPLOYMENT.pr_comment_vm_image_build) for pr in vm_image_prs] + [
-            (pr, None) for pr in basic_prs
-        ]
+        all_comment_prs = [(pr, None) for pr in basic_prs]
 
         logging.debug(
-            "Found %d VM image build PRs and %d basic test case PRs",
-            len(vm_image_prs),
+            "Found %d basic test case PRs",
             len(basic_prs),
         )
 
