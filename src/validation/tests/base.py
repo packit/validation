@@ -8,6 +8,7 @@ import logging
 from ogr.abstract import GitProject
 
 from validation.deployment import DEPLOYMENT
+from validation.testcase.base import TestFailureError
 from validation.utils.trigger import Trigger
 
 
@@ -103,6 +104,7 @@ class Tests:
         logging.info("Starting validation tests for %s", self.project.service.instance_url)
         logging.debug("Fetching PR list from %s/%s", self.project.namespace, self.project.repo)
         tasks = []
+        test_metadata = []  # Track test details for summary
 
         # Fetch PR list once and cache it
         all_prs = list(self.project.get_pr_list())
@@ -121,6 +123,14 @@ class Tests:
                     deployment=DEPLOYMENT,
                     existing_prs=all_prs,
                 ).run_test(),
+            )
+            test_metadata.append(
+                {
+                    "type": "new_pr",
+                    "pr_url": None,  # Will be created during test
+                    "pr_title": "New PR test",
+                    "trigger": "pr_opened",
+                },
             )
         except Exception as e:
             logging.exception("Failed to create test task: %s", e)
@@ -144,6 +154,14 @@ class Tests:
                     trigger=Trigger.push,
                     deployment=DEPLOYMENT,
                 ).run_test(),
+            )
+            test_metadata.append(
+                {
+                    "type": "push",
+                    "pr_url": pr_for_push[0].url,
+                    "pr_title": pr_for_push[0].title,
+                    "trigger": "push",
+                },
             )
         else:
             msg = (
@@ -170,18 +188,24 @@ class Tests:
                 self.project.service.instance_url,
             )
 
-            tasks.extend(
-                [
+            for pr, comment in all_comment_prs:
+                tasks.append(
                     self.test_case_kls(
                         project=self.project,
                         pr=pr,
                         trigger=Trigger.comment,
                         deployment=DEPLOYMENT,
                         comment=comment,
-                    ).run_test()
-                    for pr, comment in all_comment_prs
-                ],
-            )
+                    ).run_test(),
+                )
+                test_metadata.append(
+                    {
+                        "type": "comment",
+                        "pr_url": pr.url,
+                        "pr_title": pr.title,
+                        "trigger": "comment",
+                    },
+                )
         else:
             logging.warning(
                 "No comment-based test PRs found for %s",
@@ -218,19 +242,66 @@ class Tests:
         failed = sum(1 for r in results if r is False or isinstance(r, Exception))
         total = len(results)
 
-        # Log summary
-        separator = "=" * 60
-        logging.info(
-            "%s\nTest Summary for %s:\n  Total:  %d\n  Passed: %d\n  Failed: %d\n%s",
-            separator,
-            self.project.service.instance_url,
-            total,
-            passed,
-            failed,
-            separator,
-        )
+        # Collect failed test details
+        failed_tests = []
+        for i, result in enumerate(results):
+            if result is False or isinstance(result, Exception):
+                metadata = test_metadata[i] if i < len(test_metadata) else {}
+                pr_url = metadata.get("pr_url", "Unknown")
+                pr_title = metadata.get("pr_title", "Unknown")
+                trigger = metadata.get("trigger", "unknown")
 
-        # Log any exceptions that occurred
+                if isinstance(result, TestFailureError):
+                    # TestFailureError contains the actual failure message
+                    reason = str(result)
+                elif isinstance(result, Exception):
+                    reason = f"Exception: {result!s}"
+                else:
+                    reason = "Test returned False (check logs for details)"
+
+                failed_tests.append(
+                    {
+                        "pr_url": pr_url,
+                        "pr_title": pr_title,
+                        "trigger": trigger,
+                        "reason": reason,
+                    },
+                )
+
+        # Log summary at ERROR level if there are failures, otherwise INFO level
+        separator = "=" * 60
+        log_level = logging.ERROR if failed > 0 else logging.INFO
+
+        summary_lines = [
+            separator,
+            f"Test Summary for {self.project.service.instance_url}:",
+            f"  Total:  {total}",
+            f"  Passed: {passed}",
+            f"  Failed: {failed}",
+        ]
+
+        # Add failed test details if there are any failures
+        if failed_tests:
+            summary_lines.append("")
+            summary_lines.append("Failed Tests:")
+            for idx, failed_test in enumerate(failed_tests, 1):
+                summary_lines.append(f"  {idx}. {failed_test['pr_title']}")
+                if failed_test["pr_url"]:
+                    summary_lines.append(f"     URL: {failed_test['pr_url']}")
+                summary_lines.append(f"     Trigger: {failed_test['trigger']}")
+                summary_lines.append(f"     Reason: {failed_test['reason']}")
+
+        summary_lines.append(separator)
+
+        logging.log(log_level, "\n".join(summary_lines))
+
+        # Log detailed exceptions separately
         for i, result in enumerate(results):
             if isinstance(result, Exception):
-                logging.error("Task %d failed with exception: %s", i, result, exc_info=result)
+                metadata = test_metadata[i] if i < len(test_metadata) else {}
+                pr_info = metadata.get("pr_url", f"Task {i}")
+                logging.error(
+                    "Detailed traceback for %s:",
+                    pr_info,
+                    exc_info=result,
+                )

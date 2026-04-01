@@ -565,7 +565,7 @@ class PagureTestcase(Testcase):
             # 5 = FAILED
 
             if task_state == state_reported:
-                await asyncio.sleep(60)
+                await asyncio.sleep(self.POLLING_INTERVAL * 60)
                 continue
 
             state_reported = task_state
@@ -598,7 +598,7 @@ class PagureTestcase(Testcase):
                 self.failure_msg += f"The Koji task was not successful. Koji state: {state}.\n"
                 return
 
-            await asyncio.sleep(60)
+            await asyncio.sleep(self.POLLING_INTERVAL * 60)
 
     def get_package_name(self) -> str:
         """

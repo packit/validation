@@ -20,11 +20,16 @@ from validation.helpers import copr, log_failure
 from validation.utils.trigger import Trigger
 
 
+class TestFailureError(Exception):
+    """Exception raised when a test case fails with a specific failure message."""
+
+
 class Testcase(ABC):
     CHECK_TIME_FOR_REACTION = 2  # minutes - time to wait for commit statuses to be set to pending
     CHECK_TIME_FOR_SUBMIT_BUILDS = 5  # minutes - time to wait for build to be submitted in Copr
     CHECK_TIME_FOR_BUILD = 60  # minutes - time to wait for build to complete
     CHECK_TIME_FOR_WATCH_STATUSES = 60  # minutes - time to watch for commit statuses
+    POLLING_INTERVAL = 2  # minutes - interval between status/build checks
     PACKIT_YAML_PATH = ".packit.yaml"
     MAX_COMMENTS_TO_CHECK = 5  # Limit comment fetching to avoid excessive API calls
     HTTP_FORBIDDEN = 403  # HTTP status code for forbidden/access denied
@@ -124,16 +129,19 @@ class Testcase(ABC):
                 message = f"{self.pr.title} ({self.pr.url}) failed: {self.failure_msg}"
                 logging.error("Test failed: %s", message)
                 log_failure(message)
-                test_passed = False
-            else:
-                logging.info("Test passed for %s", pr_id)
-                test_passed = True
+                # Raise exception with failure message for better error reporting
+                raise TestFailureError(self.failure_msg.strip())
+            logging.info("Test passed for %s", pr_id)
+            test_passed = True
 
             if self.trigger == Trigger.pr_opened:
                 logging.debug("Closing PR and deleting branch for %s", pr_id)
                 self.pr.close()
                 if self.pr_branch_ref:
                     self.pr_branch_ref.delete()
+        except TestFailureError:
+            # Re-raise TestFailureError to preserve the failure message
+            raise
         except Exception as e:
             pr_info = f"{self.pr.title} ({self.pr.url})" if self.pr else "new PR"
             msg = f"Validation test {pr_info} failed: {e}"
@@ -290,7 +298,7 @@ class Testcase(ABC):
                 if not self.is_status_completed(status):
                     return
 
-            await asyncio.sleep(60)
+            await asyncio.sleep(self.POLLING_INTERVAL * 60)
 
     async def check_build_submitted(self):
         """
@@ -384,7 +392,7 @@ class Testcase(ABC):
 
             build = copr().build_proxy.get(build_id)
             if build.state == state_reported:
-                await asyncio.sleep(60)
+                await asyncio.sleep(self.POLLING_INTERVAL * 60)
                 continue
             state_reported = build.state
 
@@ -402,7 +410,7 @@ class Testcase(ABC):
                     )
                 return
 
-            await asyncio.sleep(60)
+            await asyncio.sleep(self.POLLING_INTERVAL * 60)
 
     def check_comment(self):
         """
@@ -515,7 +523,7 @@ class Testcase(ABC):
                             self.failure_msg += f"{self.get_status_name(status)}\n"
                 return
 
-            await asyncio.sleep(60)
+            await asyncio.sleep(self.POLLING_INTERVAL * 60)
 
     @property
     @abstractmethod
