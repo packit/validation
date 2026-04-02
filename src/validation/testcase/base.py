@@ -242,12 +242,35 @@ class Testcase(ABC):
         """
         Run all checks of the test case.
         """
-        await self.check_build_submitted()
+        # Check if this is a "skip build" test - if so, skip Copr checks
+        skip_copr_checks = False
+        if self.pr and "skip" in self.pr.title.lower() and "build" in self.pr.title.lower():
+            skip_copr_checks = True
+            logging.info("Detected 'skip build' test: %s - skipping Copr checks", self.pr.title)
 
-        if not self._build:
-            return
+        if skip_copr_checks:
+            # For skip_build tests, trigger the build but don't wait for Copr submission/completion
+            self._build_triggered_at = datetime.now(tz=timezone.utc)
+            self.trigger_build()
 
-        await self.check_build(self._build.id)
+            # Wait for packit-service to process the webhook and set statuses
+            if self.trigger == Trigger.pr_opened:
+                logging.debug("Waiting 30s for packit-service to receive webhook...")
+                await asyncio.sleep(30)
+            else:
+                await asyncio.sleep(5)
+
+            # Check that statuses are set (should show build was skipped)
+            await self.check_pending_check_runs()
+        else:
+            # Normal flow: check build submission and completion
+            await self.check_build_submitted()
+
+            if not self._build:
+                return
+
+            await self.check_build(self._build.id)
+
         await self.check_completed_statuses()
         self.check_comment()
 
