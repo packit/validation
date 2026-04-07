@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: MIT
 
 import asyncio
+import configparser
 import logging
 import os
 import shutil
@@ -73,6 +74,7 @@ class PagureTestcase(Testcase):
         super().__init__(*args, **kwargs)
         self._temp_dir = None
         self._fork = None
+        self._config_dir = None
 
     @property
     def account_name(self):
@@ -92,11 +94,41 @@ class PagureTestcase(Testcase):
         raise NotImplementedError(msg)
 
     def _cleanup(self):
-        """Clean up temporary directory created for git operations."""
+        """Clean up temporary directories created for git operations and config."""
         if self._temp_dir and Path(self._temp_dir).exists():
             logging.debug("Cleaning up temporary directory: %s", self._temp_dir)
             shutil.rmtree(self._temp_dir)
             self._temp_dir = None
+        if self._config_dir and Path(self._config_dir).exists():
+            logging.debug("Cleaning up config directory: %s", self._config_dir)
+            shutil.rmtree(self._config_dir)
+            self._config_dir = None
+
+    def _setup_fedpkg_token(self):
+        """
+        Write PAGURE_TOKEN to fedpkg config file in a temporary directory.
+        Returns the config file path to be used with --user-config option.
+        """
+        token = os.getenv("PAGURE_TOKEN")
+        if not token:
+            logging.warning("PAGURE_TOKEN not set, fedpkg commands may fail")
+            return None
+
+        # Create temporary config directory
+        self._config_dir = tempfile.mkdtemp(prefix="validation-fedpkg-config-")
+        config_file = Path(self._config_dir) / "fedpkg.conf"
+
+        # Create config with token
+        config = configparser.ConfigParser()
+        config.add_section("fedpkg.distgit")
+        config.set("fedpkg.distgit", "token", token)
+
+        # Write config
+        with open(config_file, "w") as f:
+            config.write(f)
+
+        logging.debug("Wrote PAGURE_TOKEN to %s", config_file)
+        return str(config_file)
 
     def _get_authenticated_username(self):
         """Get the authenticated user's username."""
@@ -125,6 +157,9 @@ class PagureTestcase(Testcase):
     def _setup_git_repo(self):
         """Clone the repository using fedpkg and set up fork."""
         if self._temp_dir is None:
+            # Set up fedpkg token from environment variable
+            config_file = self._setup_fedpkg_token()
+
             # Create parent temporary directory
             parent_temp = tempfile.mkdtemp(prefix="validation-pagure-")
             logging.debug("Created temporary directory: %s", parent_temp)
@@ -142,9 +177,15 @@ class PagureTestcase(Testcase):
             package_name = self.project.repo
             logging.info("Cloning %s using fedpkg", package_name)
 
+            # Build fedpkg command with config file if available
+            clone_cmd = ["fedpkg"]
+            if config_file:
+                clone_cmd.extend(["--user-config", config_file])
+            clone_cmd.extend(["clone", "-a", package_name])
+
             try:
                 subprocess.run(  # noqa: S603
-                    ["fedpkg", "clone", "-a", package_name],  # noqa: S607
+                    clone_cmd,
                     cwd=parent_temp,
                     check=True,
                     capture_output=True,
@@ -163,9 +204,16 @@ class PagureTestcase(Testcase):
             # Use fedpkg to set up fork remote
             logging.info("Setting up fork with fedpkg")
             user = self.account_name
+
+            # Build fedpkg fork command with config file if available
+            fork_cmd = ["fedpkg"]
+            if config_file:
+                fork_cmd.extend(["--user-config", config_file])
+            fork_cmd.append("fork")
+
             try:
                 subprocess.run(  # noqa: S603
-                    ["fedpkg", "fork"],  # noqa: S607
+                    fork_cmd,
                     cwd=self._temp_dir,
                     check=True,
                     capture_output=True,
