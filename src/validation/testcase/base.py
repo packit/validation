@@ -25,6 +25,9 @@ class TestFailureError(Exception):
 
 
 class Testcase(ABC):
+    CHECK_TIME_FOR_STATUSES_TO_APPEAR = (
+        2  # minutes - time to wait for statuses to appear after trigger
+    )
     CHECK_TIME_FOR_REACTION = 2  # minutes - time to wait for commit statuses to be set to pending
     CHECK_TIME_FOR_SUBMIT_BUILDS = 5  # minutes - time to wait for build to be submitted in Copr
     CHECK_TIME_FOR_BUILD = 60  # minutes - time to wait for build to complete
@@ -279,21 +282,30 @@ class Testcase(ABC):
         Check whether some check run is set to queued
         (they are updated in loop, so it is enough).
         """
-        status_names = [self.get_status_name(status) for status in self.get_statuses()]
+        # Filter to only recent statuses (created after build was triggered)
+        recent_statuses = [
+            status for status in self.get_statuses() if self.is_status_recent(status)
+        ]
+        status_names = [self.get_status_name(status) for status in recent_statuses]
 
-        watch_end = datetime.now(tz=timezone.utc) + timedelta(minutes=self.CHECK_TIME_FOR_REACTION)
-        failure_message = (
-            f"Commit statuses were not set to pending in time "
-            f"({self.CHECK_TIME_FOR_REACTION} minutes).\n"
+        # Phase 1: Wait for statuses to appear
+        watch_end = datetime.now(tz=timezone.utc) + timedelta(
+            minutes=self.CHECK_TIME_FOR_STATUSES_TO_APPEAR,
         )
 
         # when a new PR is opened
         while len(status_names) == 0:
             if datetime.now(tz=timezone.utc) > watch_end:
-                self.failure_msg += failure_message
+                self.failure_msg += (
+                    f"Commit statuses did not appear in time "
+                    f"({self.CHECK_TIME_FOR_STATUSES_TO_APPEAR} minutes).\n"
+                )
                 return
             await asyncio.sleep(30)
-            status_names = [self.get_status_name(status) for status in self.get_statuses()]
+            recent_statuses = [
+                status for status in self.get_statuses() if self.is_status_recent(status)
+            ]
+            status_names = [self.get_status_name(status) for status in recent_statuses]
 
         logging.info(
             "Watching pending statuses for commit %s",
@@ -303,15 +315,21 @@ class Testcase(ABC):
         # Small delay before entering polling loop to avoid rapid API calls
         await asyncio.sleep(5)
 
+        # Phase 2: Wait for statuses to be set to pending (reset timeout)
+        watch_end = datetime.now(tz=timezone.utc) + timedelta(minutes=self.CHECK_TIME_FOR_REACTION)
+
         while True:
             if datetime.now(tz=timezone.utc) > watch_end:
-                self.failure_msg += failure_message
+                self.failure_msg += (
+                    f"Commit statuses were not set to pending in time "
+                    f"({self.CHECK_TIME_FOR_REACTION} minutes).\n"
+                )
                 return
 
             new_statuses = [
                 status
                 for status in self.get_statuses()
-                if self.get_status_name(status) in status_names
+                if self.get_status_name(status) in status_names and self.is_status_recent(status)
             ]
 
             for status in new_statuses:

@@ -2,6 +2,7 @@
 #
 # SPDX-License-Identifier: MIT
 
+import logging
 from datetime import timedelta
 
 from gitlab import GitlabGetError
@@ -12,6 +13,12 @@ from validation.testcase.base import Testcase
 
 
 class GitlabTestcase(Testcase):
+    # Gitlab instances are more slow than GitHub
+    CHECK_TIME_FOR_STATUSES_TO_APPEAR = (
+        3  # minutes - time to wait for statuses to appear after trigger
+    )
+    CHECK_TIME_FOR_REACTION = 3  # minutes - time to wait for commit statuses to be set to pending
+    CHECK_TIME_FOR_SUBMIT_BUILDS = 7  # minutes - time to wait for build to be submitted in Copr
     project: GitlabProject
 
     @property
@@ -40,12 +47,50 @@ class GitlabTestcase(Testcase):
             },
         )
 
+    def _check_status_author(self, status: CommitFlag) -> bool:
+        """
+        Check if status author matches the account name.
+        Returns True if match, False otherwise (including on errors).
+        """
+        try:
+            if not status._raw_commit_flag or not status._raw_commit_flag.author:
+                return False
+            author_username = status._raw_commit_flag.author["username"]
+            logging.debug(
+                "Status '%s' by '%s' - Match: %s",
+                status.context,
+                author_username,
+                author_username == self.account_name,
+            )
+            return author_username == self.account_name
+        except (KeyError, AttributeError, TypeError) as e:
+            logging.warning(
+                "Failed to get author for status %s: %s - Raw: %s",
+                status.context,
+                e,
+                status._raw_commit_flag,
+            )
+            return False
+
     def get_statuses(self) -> list[CommitFlag]:
-        return [
-            status
-            for status in self.project.get_commit_statuses(commit=self.head_commit)
-            if status._raw_commit_flag.author["username"] == self.account_name
-        ]
+        all_statuses = list(self.project.get_commit_statuses(commit=self.head_commit))
+
+        logging.debug(
+            "Fetching statuses for commit %s, looking for author: %s",
+            self.head_commit,
+            self.account_name,
+        )
+
+        filtered_statuses = [status for status in all_statuses if self._check_status_author(status)]
+
+        logging.debug(
+            "Found %d/%d statuses from %s",
+            len(filtered_statuses),
+            len(all_statuses),
+            self.account_name,
+        )
+
+        return filtered_statuses
 
     def is_status_successful(self, status: CommitFlag) -> bool:
         return status.state == CommitStatus.success
