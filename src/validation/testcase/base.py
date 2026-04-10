@@ -26,13 +26,16 @@ class TestFailureError(Exception):
 
 class Testcase(ABC):
     CHECK_TIME_FOR_STATUSES_TO_APPEAR = (
-        2  # minutes - time to wait for statuses to appear after trigger
+        3  # minutes - time to wait for statuses to appear after trigger
     )
-    CHECK_TIME_FOR_REACTION = 2  # minutes - time to wait for commit statuses to be set to pending
+    CHECK_TIME_FOR_REACTION = 3  # minutes - time to wait for commit statuses to be set to pending
     CHECK_TIME_FOR_SUBMIT_BUILDS = 5  # minutes - time to wait for build to be submitted in Copr
     CHECK_TIME_FOR_BUILD = 60  # minutes - time to wait for build to complete
     CHECK_TIME_FOR_WATCH_STATUSES = 60  # minutes - time to watch for commit statuses
     POLLING_INTERVAL = 2  # minutes - interval between status/build checks
+    # Initial wait times after triggering build, before first API check (API caching delays)
+    WAIT_AFTER_OPENED_PR = 2  # minutes - wait for API to reflect statuses after opening new PR
+    WAIT_AFTER_COMMENT_PUSH = 1  # minutes - wait after comment/push trigger
     PACKIT_YAML_PATH = ".packit.yaml"
     MAX_COMMENTS_TO_CHECK = 5  # Limit comment fetching to avoid excessive API calls
     HTTP_FORBIDDEN = 403  # HTTP status code for forbidden/access denied
@@ -256,12 +259,19 @@ class Testcase(ABC):
             self._build_triggered_at = datetime.now(tz=timezone.utc)
             self.trigger_build()
 
-            # Wait for packit-service to process the webhook and set statuses
+            # Wait for API to reflect newly created statuses (caching/eventual consistency)
             if self.trigger == Trigger.pr_opened:
-                logging.debug("Waiting 30s for packit-service to receive webhook...")
-                await asyncio.sleep(30)
+                logging.debug(
+                    "Waiting %d minute(s) for API to reflect new statuses...",
+                    self.WAIT_AFTER_OPENED_PR,
+                )
+                await asyncio.sleep(self.WAIT_AFTER_OPENED_PR * 60)
             else:
-                await asyncio.sleep(5)
+                logging.debug(
+                    "Waiting %d minute(s) for webhook processing...",
+                    self.WAIT_AFTER_COMMENT_PUSH,
+                )
+                await asyncio.sleep(self.WAIT_AFTER_COMMENT_PUSH * 60)
 
             # Check that statuses are set (should show build was skipped)
             await self.check_pending_check_runs()
@@ -282,11 +292,10 @@ class Testcase(ABC):
         Check whether some check run is set to queued
         (they are updated in loop, so it is enough).
         """
-        # Filter to only recent statuses (created after build was triggered)
-        recent_statuses = [
-            status for status in self.get_statuses() if self.is_status_recent(status)
-        ]
-        status_names = [self.get_status_name(status) for status in recent_statuses]
+        # Don't filter by recency here - just check that statuses exist
+        # Recency filtering happens later in watch_statuses() to exclude old completed statuses
+        all_statuses = self.get_statuses()
+        status_names = [self.get_status_name(status) for status in all_statuses]
 
         # Phase 1: Wait for statuses to appear
         watch_end = datetime.now(tz=timezone.utc) + timedelta(
@@ -302,10 +311,8 @@ class Testcase(ABC):
                 )
                 return
             await asyncio.sleep(30)
-            recent_statuses = [
-                status for status in self.get_statuses() if self.is_status_recent(status)
-            ]
-            status_names = [self.get_status_name(status) for status in recent_statuses]
+            all_statuses = self.get_statuses()
+            status_names = [self.get_status_name(status) for status in all_statuses]
 
         logging.info(
             "Watching pending statuses for commit %s",
@@ -326,10 +333,11 @@ class Testcase(ABC):
                 )
                 return
 
+            # Check all statuses with matching names (don't filter by recency yet)
             new_statuses = [
                 status
                 for status in self.get_statuses()
-                if self.get_status_name(status) in status_names and self.is_status_recent(status)
+                if self.get_status_name(status) in status_names
             ]
 
             for status in new_statuses:
@@ -359,14 +367,19 @@ class Testcase(ABC):
         self._build_triggered_at = datetime.now(tz=timezone.utc)
         self.trigger_build()
 
-        # For new PR, wait longer to give packit-service time to receive webhook
-        # and set up initial statuses before we start polling
+        # Wait for API to reflect newly created statuses (caching/eventual consistency)
         if self.trigger == Trigger.pr_opened:
-            logging.debug("Waiting 30s for packit-service to receive webhook...")
-            await asyncio.sleep(30)
+            logging.debug(
+                "Waiting %d minute(s) for API to reflect new statuses...",
+                self.WAIT_AFTER_OPENED_PR,
+            )
+            await asyncio.sleep(self.WAIT_AFTER_OPENED_PR * 60)
         else:
-            # For comment/push triggers, shorter wait is fine
-            await asyncio.sleep(5)
+            logging.debug(
+                "Waiting %d minute(s) for webhook processing...",
+                self.WAIT_AFTER_COMMENT_PUSH,
+            )
+            await asyncio.sleep(self.WAIT_AFTER_COMMENT_PUSH * 60)
 
         watch_end = datetime.now(tz=timezone.utc) + timedelta(
             minutes=self.CHECK_TIME_FOR_SUBMIT_BUILDS,

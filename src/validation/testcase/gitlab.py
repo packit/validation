@@ -13,12 +13,6 @@ from validation.testcase.base import Testcase
 
 
 class GitlabTestcase(Testcase):
-    # Gitlab instances are more slow than GitHub
-    CHECK_TIME_FOR_STATUSES_TO_APPEAR = (
-        3  # minutes - time to wait for statuses to appear after trigger
-    )
-    CHECK_TIME_FOR_REACTION = 3  # minutes - time to wait for commit statuses to be set to pending
-    CHECK_TIME_FOR_SUBMIT_BUILDS = 7  # minutes - time to wait for build to be submitted in Copr
     project: GitlabProject
 
     @property
