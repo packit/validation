@@ -2,7 +2,8 @@
 #
 # SPDX-License-Identifier: MIT
 
-from functools import cached_property
+import logging
+from datetime import timedelta
 
 from gitlab import GitlabGetError
 from ogr.abstract import CommitFlag, CommitStatus
@@ -18,8 +19,7 @@ class GitlabTestcase(Testcase):
     def account_name(self):
         return self.deployment.gitlab_account_name
 
-    @cached_property
-    def copr_project_name(self) -> str:
+    def construct_copr_project_name(self) -> str:
         return f"{self.project.service.hostname}-{self.project.namespace}-hello-world-{self.pr.id}"
 
     def get_status_name(self, status: CommitFlag) -> str:
@@ -41,12 +41,50 @@ class GitlabTestcase(Testcase):
             },
         )
 
+    def _check_status_author(self, status: CommitFlag) -> bool:
+        """
+        Check if status author matches the account name.
+        Returns True if match, False otherwise (including on errors).
+        """
+        try:
+            if not status._raw_commit_flag or not status._raw_commit_flag.author:
+                return False
+            author_username = status._raw_commit_flag.author["username"]
+            logging.debug(
+                "Status '%s' by '%s' - Match: %s",
+                status.context,
+                author_username,
+                author_username == self.account_name,
+            )
+            return author_username == self.account_name
+        except (KeyError, AttributeError, TypeError) as e:
+            logging.warning(
+                "Failed to get author for status %s: %s - Raw: %s",
+                status.context,
+                e,
+                status._raw_commit_flag,
+            )
+            return False
+
     def get_statuses(self) -> list[CommitFlag]:
-        return [
-            status
-            for status in self.project.get_commit_statuses(commit=self.head_commit)
-            if status._raw_commit_flag.author["username"] == self.account_name
-        ]
+        all_statuses = list(self.project.get_commit_statuses(commit=self.head_commit))
+
+        logging.debug(
+            "Fetching statuses for commit %s, looking for author: %s",
+            self.head_commit,
+            self.account_name,
+        )
+
+        filtered_statuses = [status for status in all_statuses if self._check_status_author(status)]
+
+        logging.debug(
+            "Found %d/%d statuses from %s",
+            len(filtered_statuses),
+            len(all_statuses),
+            self.account_name,
+        )
+
+        return filtered_statuses
 
     def is_status_successful(self, status: CommitFlag) -> bool:
         return status.state == CommitStatus.success
@@ -56,6 +94,23 @@ class GitlabTestcase(Testcase):
             CommitStatus.running,
             CommitStatus.pending,
         ]
+
+    def is_status_recent(self, status: CommitFlag) -> bool:
+        """
+        Check if the status was created after the build was triggered.
+        Uses created timestamp with a 1-minute buffer for clock skew.
+        """
+        if not self._build_triggered_at:
+            return True  # No trigger time set, accept all statuses
+        if not status.created:
+            return True  # No timestamp on status, accept it
+
+        # Convert naive datetime to UTC-aware if needed
+        status_time = self._ensure_aware_datetime(status.created)
+
+        # Allow 1 minute buffer for clock skew
+        buffer_time = self._build_triggered_at - timedelta(minutes=1)
+        return status_time >= buffer_time
 
     def delete_previous_branch(self, branch: str):
         try:
@@ -71,6 +126,11 @@ class GitlabTestcase(Testcase):
         file.save(branch=branch, commit_message=commit_msg)
 
     def create_empty_commit(self, branch: str, commit_msg: str) -> str:
-        data = {"branch": branch, "commit_message": commit_msg, "actions": []}
+        data = {
+            "branch": branch,
+            "commit_message": commit_msg,
+            "actions": [],
+            "allow_empty": True,
+        }
         commit = self.project.gitlab_repo.commits.create(data)
         return commit.id
