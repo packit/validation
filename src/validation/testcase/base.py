@@ -173,7 +173,14 @@ class Testcase(ABC):
                 msg = "Cannot post comment: PR is not set"
                 raise ValueError(msg)
 
-            comment = self.comment or self.deployment.pr_comment
+            # For skip_build tests, use test comment instead of build comment
+            if self.comment:
+                comment = self.comment
+            elif self.pr and "skip" in self.pr.title.lower() and "build" in self.pr.title.lower():
+                comment = self.deployment.pr_comment_test
+                logging.info("Using test comment for skip_build test: %s", comment)
+            else:
+                comment = self.deployment.pr_comment
             try:
                 self.pr.comment(comment)
             except GithubAPIException as e:
