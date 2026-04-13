@@ -2,14 +2,16 @@
 #
 # SPDX-License-Identifier: MIT
 
+import asyncio
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 from gitlab import GitlabGetError
 from ogr.abstract import CommitFlag, CommitStatus
 from ogr.services.gitlab import GitlabProject
 
 from validation.testcase.base import Testcase
+from validation.utils.trigger import Trigger
 
 
 class GitlabTestcase(Testcase):
@@ -134,3 +136,93 @@ class GitlabTestcase(Testcase):
         }
         commit = self.project.gitlab_repo.commits.create(data)
         return commit.id
+
+    async def check_pending_check_runs(self):
+        """
+        Override to add extended wait time for GitLab opened PR webhook delays.
+        GitLab webhook delivery can be delayed by over an hour during high load.
+        """
+        # First, try the normal check with standard timeouts
+        initial_failure_msg = self.failure_msg
+        await super().check_pending_check_runs()
+
+        # If this is an opened PR trigger and the initial check failed
+        if (
+            self.trigger == Trigger.pr_opened
+            and self.failure_msg != initial_failure_msg
+            and "Commit statuses did not appear in time" in self.failure_msg
+        ):
+            logging.error(
+                "GitLab webhook delivery delayed - statuses did not appear within %d minutes. "
+                "This is a known issue with GitLab webhook queuing during high load. "
+                "Waiting an additional 60 minutes for delayed webhook delivery...",
+                self.CHECK_TIME_FOR_STATUSES_TO_APPEAR,
+            )
+
+            # Clear the failure message and wait longer
+            self.failure_msg = initial_failure_msg
+
+            # Wait up to 60 more minutes for statuses to appear
+            watch_end = datetime.now(tz=timezone.utc) + timedelta(minutes=60)
+            all_statuses = self.get_statuses()
+            status_names = [self.get_status_name(status) for status in all_statuses]
+
+            while len(status_names) == 0:
+                if datetime.now(tz=timezone.utc) > watch_end:
+                    logging.error(
+                        "GitLab webhook still not received after extended 60 minute wait. "
+                        "Total wait time: %d minutes. "
+                        "This indicates a significant GitLab webhook delay.",
+                        self.CHECK_TIME_FOR_STATUSES_TO_APPEAR + 60,
+                    )
+                    self.failure_msg += (
+                        f"Commit statuses did not appear even after extended wait "
+                        f"({self.CHECK_TIME_FOR_STATUSES_TO_APPEAR + 60} minutes total).\n"
+                        "Note: GitLab webhook delivery was significantly delayed.\n"
+                    )
+                    return
+                await asyncio.sleep(30)
+                all_statuses = self.get_statuses()
+                status_names = [self.get_status_name(status) for status in all_statuses]
+
+            logging.error(
+                "GitLab webhook eventually received after extended wait. "
+                "Statuses appeared, continuing with test validation. "
+                "This delay is expected for GitLab during high load periods.",
+            )
+
+            # Continue with phase 2: wait for statuses to be set to pending
+            logging.info(
+                "Watching pending statuses for commit %s",
+                self.head_commit,
+            )
+
+            await asyncio.sleep(5)
+
+            watch_end = datetime.now(tz=timezone.utc) + timedelta(
+                minutes=self.CHECK_TIME_FOR_REACTION,
+            )
+
+            while True:
+                if datetime.now(tz=timezone.utc) > watch_end:
+                    self.failure_msg += (
+                        f"Commit statuses were not set to pending in time "
+                        f"({self.CHECK_TIME_FOR_REACTION} minutes).\n"
+                    )
+                    return
+
+                new_statuses = [
+                    status
+                    for status in self.get_statuses()
+                    if self.get_status_name(status) in status_names
+                ]
+
+                for status in new_statuses:
+                    if not self.is_status_completed(status):
+                        logging.info(
+                            "At least one commit status is now pending/running: %s",
+                            self.get_status_name(status),
+                        )
+                        return
+
+                await asyncio.sleep(30)
