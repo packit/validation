@@ -17,9 +17,9 @@ class GitlabTests(Tests):
     # (new PR, push trigger, comment tests)
     # GitLab has more generous limits than GitHub (2000/min vs 5000/hour)
     min_required_rate_limit = 250
-    # Stagger tests by 60 seconds to avoid race conditions in packit-service
+    # Stagger tests to avoid overloading packit-service instances
     # when multiple events arrive simultaneously for the same project
-    test_stagger_seconds = 60
+    test_stagger_seconds = 180
 
     def __init__(
         self,

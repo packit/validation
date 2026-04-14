@@ -36,7 +36,15 @@ def sentry_sdk():
     if sentry_secret := getenv("SENTRY_SECRET"):
         import sentry_sdk
 
-        sentry_sdk.init(sentry_secret)
+        from validation.deployment import DEPLOYMENT
+
+        # Set environment based on deployment to distinguish in Sentry
+        environment = f"validation-{DEPLOYMENT.name}"
+
+        sentry_sdk.init(
+            sentry_secret,
+            environment=environment,
+        )
         return sentry_sdk
 
     logging.warning("SENTRY_SECRET was not set!")

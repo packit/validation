@@ -229,15 +229,34 @@ class PagureTestcase(Testcase):
                     git_hostname = hostname
 
                 ssh_url = f"ssh://{user}@{git_hostname}/forks/{user}/{self.project.namespace}/{self.project.repo}.git"
-                logging.debug("Changing fork remote to SSH: %s", ssh_url)
+                logging.debug("Configuring fork remote to SSH: %s", ssh_url)
 
-                subprocess.run(  # noqa: S603
-                    ["git", "remote", "set-url", user, ssh_url],  # noqa: S607
+                # Check if remote exists, create if not
+                check_remote = subprocess.run(  # noqa: S603
+                    ["git", "remote", "get-url", user],  # noqa: S607
                     cwd=self._temp_dir,
-                    check=True,
                     capture_output=True,
+                    check=False,
                 )
-                logging.debug("Fork remote configured with SSH URL")
+
+                if check_remote.returncode == 0:
+                    # Remote exists, update URL
+                    subprocess.run(  # noqa: S603
+                        ["git", "remote", "set-url", user, ssh_url],  # noqa: S607
+                        cwd=self._temp_dir,
+                        check=True,
+                        capture_output=True,
+                    )
+                    logging.debug("Updated existing fork remote")
+                else:
+                    # Remote doesn't exist, create it
+                    subprocess.run(  # noqa: S603
+                        ["git", "remote", "add", user, ssh_url],  # noqa: S607
+                        cwd=self._temp_dir,
+                        check=True,
+                        capture_output=True,
+                    )
+                    logging.debug("Created new fork remote")
 
                 # Configure git to use SSH key if provided
                 ssh_key_path = os.getenv("PAGURE_SSH_KEY")

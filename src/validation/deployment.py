@@ -27,6 +27,7 @@ class DeploymentInfo:
     name: str
     app_name: str
     pr_comment: str
+    pr_comment_test: str
     pr_comment_vm_image_build: str
     opened_pr_trigger__packit_yaml_fix: Optional[YamlFix]
     copr_user: str
@@ -39,6 +40,7 @@ PRODUCTION_INFO = DeploymentInfo(
     name="prod",
     app_name="Packit-as-a-Service",
     pr_comment="/packit build",
+    pr_comment_test="/packit test",
     pr_comment_vm_image_build="/packit vm-image-build",
     opened_pr_trigger__packit_yaml_fix=None,
     copr_user="packit",
@@ -50,6 +52,7 @@ STAGING_INFO = DeploymentInfo(
     name="stg",
     app_name="Packit-as-a-Service-stg",
     pr_comment="/packit-stg build",
+    pr_comment_test="/packit-stg test",
     pr_comment_vm_image_build="/packit-stg vm-image-build",
     opened_pr_trigger__packit_yaml_fix=YamlFix(
         from_str="---",
