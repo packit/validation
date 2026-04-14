@@ -31,5 +31,10 @@ If you want to run the script on your own:
   token](https://github.com/settings/tokens) with _public_repo_ scope.
 - Set a `GITLAB_TOKEN` environment variable holding a [personal access
   token](https://gitlab.com/-/profile/personal_access_tokens) with _api_ scope.
+- Set a `DEPLOYMENT` environment variable to either `production` or `staging`.
+- For Pagure tests (optional):
+  - Set a `PAGURE_TOKEN` environment variable with a Pagure API token.
+  - Set a `PAGURE_SSH_KEY` environment variable with the path to your SSH private key.
+  - Set a `PAGURE_KEYTAB` environment variable with the path to your Kerberos keytab file.
 - Optionally, set a `SENTRY_SECRET` environment variable if you want to send
   the validation failures to Sentry.
