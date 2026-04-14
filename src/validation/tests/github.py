@@ -15,8 +15,8 @@ class GithubTests(Tests):
     # We need at least 100 requests per test, and we run multiple comment tests
     # So require at least sufficient quota
     min_required_rate_limit = 1200
-    # Space out tests to avoid hitting rate limits
-    test_stagger_seconds = 60
+    # Space out tests to avoid hitting rate limits and reduce load on packit-service
+    test_stagger_seconds = 180
 
     def __init__(self):
         github_service = GithubService(token=getenv("GITHUB_TOKEN"))
