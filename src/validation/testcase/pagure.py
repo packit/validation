@@ -293,13 +293,13 @@ class PagureTestcase(Testcase):
         test_file.write_text("Testing the opened PR trigger.")
 
         # Add and commit the file
-        subprocess.run(  # noqa: S603
+        subprocess.run(
             ["git", "add", "test.txt"],  # noqa: S607
             cwd=repo_dir,
             check=True,
             capture_output=True,
         )
-        subprocess.run(  # noqa: S603
+        subprocess.run(
             ["git", "commit", "-m", "Opened PR trigger"],  # noqa: S607
             cwd=repo_dir,
             check=True,
@@ -510,7 +510,7 @@ class PagureTestcase(Testcase):
         )
 
         # Get commit SHA
-        result = subprocess.run(  # noqa: S603
+        result = subprocess.run(
             ["git", "rev-parse", "HEAD"],  # noqa: S607
             cwd=repo_dir,
             check=True,
